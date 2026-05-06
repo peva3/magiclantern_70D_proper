@@ -18,4 +18,15 @@ mlv_snd
 pic_view
 sd_uhs
 selftest
+sf_dump
 silent
+hw_test
+wifi_enable
+wifi_test
+raw_vidx
+ptptun
+wifisrv
+adtglog2
+ramdump
+live_comp
+holy_grail
