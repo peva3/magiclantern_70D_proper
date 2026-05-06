@@ -21,6 +21,7 @@
 #endif
 
 static int is_5D3 = 0;
+static int is_70D = 0;
 static int is_6D = 0;
 static int is_EOSM = 0;
 static int is_basic = 0;
@@ -124,6 +125,42 @@ static const char crop_choices_help_basic[] =
 static const char crop_choices_help2_basic[] =
     "3x3 binning in 720p (square pixels in RAW, vertical crop)";
 
+/* menu choices for 70D */
+static enum crop_preset crop_presets_70d[] = {
+    CROP_PRESET_OFF,
+    CROP_PRESET_3X,
+    CROP_PRESET_3x3_1X,
+    CROP_PRESET_3x3_1X_48p,
+    CROP_PRESET_3K,
+    CROP_PRESET_UHD,
+    CROP_PRESET_4K_HFPS,
+    CROP_PRESET_CENTER_Z,
+};
+
+static const char * crop_choices_70d[] = {
+    "OFF",
+    "1920 1:1",
+    "1920 50/60 3x3",
+    "1080p45/1040p48 3x3",
+    "3K 1:1",
+    "UHD 1:1",
+    "4K 1:1 half-fps",
+    "3K 1:1 centered x5",
+};
+
+static const char crop_choices_help_70d[] =
+    "Change 1080p and 720p movie modes into crop modes (select one)";
+
+static const char crop_choices_help2_70d[] =
+    "\n"
+    "1:1 sensor readout (square raw pixels, 3x crop, good preview in 1080p)\n"
+    "1920x960 @ 50p, 1920x800 @ 60p (3x3 binning, cropped preview)\n"
+    "1920x1080 @ 45p, 1920x1040 @ 48p, 3x3 binning (50/60 FPS in Canon menu)\n"
+    "1:1 3K crop (3072x1920 @ 24p, square raw pixels, preview broken)\n"
+    "1:1 4K UHD crop (3840x1600 @ 24p, square raw pixels, preview broken)\n"
+    "1:1 4K crop (4096x3072 @ 12.5 fps, half frame rate, preview broken)\n"
+    "1:1 readout in x5 zoom mode (centered raw, high res, cropped preview)\n";
+
 
 /* camera-specific parameters */
 static uint32_t CMOS_WRITE      = 0;
@@ -202,10 +239,10 @@ static inline int get_video_mode_index()
 static inline void FAST calc_skip_offsets(int * p_skip_left, int * p_skip_right, int * p_skip_top, int * p_skip_bottom)
 {
     /* start from LiveView values */
-    int skip_left       = 146;
-    int skip_right      = 2;
-    int skip_top        = 28;
-    int skip_bottom     = 0;
+    int skip_left = is_camera("70D", "1.1.2") ? 144 : 146;
+    int skip_right = 2;
+    int skip_top = 28;
+    int skip_bottom = 0;
 
     switch (crop_preset)
     {
@@ -279,15 +316,16 @@ static inline int get_default_skip_top()
 /* max resolution for each video mode (trial and error) */
 /* it's usually possible to push the numbers a few pixels further,
  * at the risk of corrupted frames */
+/* 70D sensor: 5472x3648 (vs 5D3 5796x3870); full-res limit is lower */
 static int max_resolutions[NUM_CROP_PRESETS][6] = {
-                                /*   24p   25p   30p   50p   60p   x5 */
-    [CROP_PRESET_3X_TALL]       = { 1920, 1728, 1536,  960,  800, 1320 },
-    [CROP_PRESET_3x3_1X]        = { 1290, 1290, 1290,  960,  800, 1320 },
-    [CROP_PRESET_3x3_1X_48p]    = { 1290, 1290, 1290, 1080, 1040, 1320 }, /* 1080p45/48 */
-    [CROP_PRESET_3K]            = { 1920, 1728, 1504,  760,  680, 1320 },
-    [CROP_PRESET_UHD]           = { 1536, 1472, 1120,  640,  540, 1320 },
-    [CROP_PRESET_4K_HFPS]       = { 3072, 3072, 2500, 1440, 1200, 1320 },
-    [CROP_PRESET_FULLRES_LV]    = { 3870, 3870, 3870, 3870, 3870, 1320 },
+/* 24p 25p 30p 50p 60p x5 */
+[CROP_PRESET_3X_TALL] = { 1920, 1728, 1536, 960, 800, 1320 },
+[CROP_PRESET_3x3_1X] = { 1290, 1290, 1290, 960, 800, 1320 },
+[CROP_PRESET_3x3_1X_48p] = { 1290, 1290, 1290, 1080, 1040, 1320 }, /* 1080p45/48 */
+[CROP_PRESET_3K] = { 1920, 1728, 1504, 760, 680, 1320 },
+[CROP_PRESET_UHD] = { 1536, 1472, 1120, 640, 540, 1320 },
+[CROP_PRESET_4K_HFPS] = { 3072, 3072, 2500, 1440, 1200, 1320 },
+[CROP_PRESET_FULLRES_LV] = { 3870, 3870, 3870, 3870, 3870, 1320 },
 };
 
 /* 5D3 vertical resolution increments over default configuration */
@@ -364,18 +402,30 @@ static int FAST check_cmos_vidmode(uint16_t* data_buf)
             }
         }
         
-        if (is_basic && !is_6D)
+    if (is_basic && !is_6D)
+    {
+        if (reg == 7)
         {
-            if (reg == 7)
+            found = 1;
+            /* prevent running in 600D hack crop mode */
+            if (value != 0x800)
             {
-                found = 1;
-                /* prevent running in 600D hack crop mode */
-                if (value != 0x800) 
-                {
-                    ok = 0;
-                }
+                ok = 0;
             }
         }
+    }
+
+    if (is_70D)
+    {
+        if (reg == 7)
+        {
+            found = 1;
+            if (value != 0x800)
+            {
+                ok = 0;
+            }
+        }
+    }
         
         data_buf++;
     }
@@ -541,12 +591,84 @@ static void FAST cmos_hook(uint32_t* regs, uint32_t* stack, uint32_t pc)
     {
         switch (crop_preset)
         {
-            case CROP_PRESET_3x3_1X:
-                /* start/stop scanning line, very large increments */
-                cmos_new[7] = (is_6D) ? PACK12(37,10) : PACK12(6,29);
-                break;            
-            default:
-                break;
+        case CROP_PRESET_3x3_1X:
+            /* start/stop scanning line, very large increments */
+            cmos_new[7] = (is_6D) ? PACK12(37,10) : PACK12(6,29);
+            break;
+        default:
+            break;
+        }
+    }
+
+    if (is_70D)
+    {
+        switch (crop_preset)
+        {
+        case CROP_PRESET_3X_TALL:
+            cmos_new[7] = /* vertical centering (from 5D3 CMOS[1], needs 70D calibration) */
+                (video_mode_fps == 24) ? PACK12(8,13) :
+                (video_mode_fps == 25) ? PACK12(8,12) :
+                (video_mode_fps == 30) ? PACK12(9,11) :
+                (video_mode_fps == 50) ? PACK12(12,10) :
+                (video_mode_fps == 60) ? PACK12(13,10) :
+                (uint32_t) -1 ;
+            cmos_new[2] = 0x10E; /* horizontal centering (from 5D3, needs 70D calibration) */
+            cmos_new[6] = 0x170; /* pink highlights without this */
+            break;
+        case CROP_PRESET_3x3_1X:
+        case CROP_PRESET_3x3_1X_48p:
+            if (is_720p())
+            {
+                cmos_new[7] = PACK12(6,29);
+                cmos_new[6] = 0x370;
+            }
+            break;
+        case CROP_PRESET_3X:
+            cmos_new[7] = (is_720p())
+                ? PACK12(13,10)
+                : PACK12(11,11);
+            cmos_new[2] = 0x10E;
+            cmos_new[6] = 0x170;
+            break;
+        case CROP_PRESET_3K:
+            cmos_new[7] =
+                (video_mode_fps == 24) ? PACK12(8,12) :
+                (video_mode_fps == 25) ? PACK12(8,12) :
+                (video_mode_fps == 30) ? PACK12(9,11) :
+                (video_mode_fps == 50) ? PACK12(13,10) :
+                (video_mode_fps == 60) ? PACK12(14,10) :
+                (uint32_t) -1 ;
+            cmos_new[2] = 0x0BE;
+            cmos_new[6] = 0x170;
+            break;
+        case CROP_PRESET_UHD:
+            cmos_new[7] =
+                (video_mode_fps == 24) ? PACK12(4,9) :
+                (video_mode_fps == 25) ? PACK12(4,9) :
+                (video_mode_fps == 30) ? PACK12(5,8) :
+                (video_mode_fps == 50) ? PACK12(12,9) :
+                (video_mode_fps == 60) ? PACK12(13,9) :
+                (uint32_t) -1 ;
+            cmos_new[2] = 0x08E;
+            cmos_new[6] = 0x170;
+            break;
+        case CROP_PRESET_4K_HFPS:
+            cmos_new[7] =
+                (video_mode_fps == 24) ? PACK12(4,15) :
+                (video_mode_fps == 25) ? PACK12(4,15) :
+                (video_mode_fps == 30) ? PACK12(6,14) :
+                (video_mode_fps == 50) ? PACK12(10,11) :
+                (video_mode_fps == 60) ? PACK12(12,11) :
+                (uint32_t) -1 ;
+            cmos_new[2] = 0x07E;
+            cmos_new[6] = 0x170;
+            break;
+        case CROP_PRESET_CENTER_Z:
+            cmos_new[7] = PACK12(9+2,42+1);
+            cmos_new[2] = 0x09E;
+            break;
+        default:
+            break;
         }
     }
 
@@ -629,10 +751,23 @@ static int FAST adtg_lookup(uint32_t* data_buf, int reg_needle)
 }
 
 /* from SENSOR_TIMING_TABLE (fps-engio.c) */
-/* hardcoded for 5D3 */
-const int default_timerA[] = { 0x1B8, 0x1E0, 0x1B8, 0x1E0, 0x1B8, 0x206 };
-const int default_timerB[] = { 0x8E3, 0x7D0, 0x71C, 0x3E8, 0x38E, 0x614 };
+/* 5D3 values as defaults; 70D override handled in get_default_timer*() */
+static const int default_timerA_5d3[] = { 0x1B8, 0x1E0, 0x1B8, 0x1E0, 0x1B8, 0x206 };
+static const int default_timerB_5d3[] = { 0x8E3, 0x7D0, 0x71C, 0x3E8, 0x38E, 0x614 };
+/* 70D values from fps-engio.c logging (TG_FREQ_BASE=32MHz) */
+static const int default_timerA_70d[] = { 700, 800, 700, 800, 800, 672 };
+static const int default_timerB_70d[] = { 1907, 1600, 1525, 800, 794, 794 };
 const int default_fps_1k[] = { 23976, 25000, 29970, 50000, 59940, 29776 };
+
+static inline int get_default_timerA(int idx)
+{
+    return is_70D ? default_timerA_70d[idx] : default_timerA_5d3[idx];
+}
+
+static inline int get_default_timerB(int idx)
+{
+    return is_70D ? default_timerB_70d[idx] : default_timerB_5d3[idx];
+}
 
 /* adapted from fps_override_shutter_blanking in fps-engio.c */
 static int adjust_shutter_blanking(int old)
@@ -643,7 +778,7 @@ static int adjust_shutter_blanking(int old)
     int video_mode = get_video_mode_index();
 
     /* what value Canon firmware assumes for timer B? */
-    int fps_timer_b_orig = default_timerB[video_mode];
+    int fps_timer_b_orig = get_default_timerB(video_mode);
 
     int current_exposure = fps_timer_b_orig - current_blanking;
     
@@ -770,11 +905,11 @@ static void FAST adtg_hook(uint32_t* regs, uint32_t* stack, uint32_t pc)
     }
 
     /* should probably be made generic */
-    if (is_5D3)
+    if (is_5D3 || is_70D)
     {
         /* all modes may want to override shutter speed */
-        /* ADTG[0x8060]: shutter blanking for 3x3 mode  */
-        /* ADTG[0x805E]: shutter blanking for zoom mode  */
+        /* ADTG[0x8060]: shutter blanking for 3x3 mode */
+        /* ADTG[0x805E]: shutter blanking for zoom mode */
         adtg_new[0] = (struct adtg_new) {6, 0x8060, shutter_blanking};
         adtg_new[1] = (struct adtg_new) {6, 0x805E, shutter_blanking};
     }
@@ -965,7 +1100,7 @@ static inline uint32_t reg_override_fps(uint32_t reg, uint32_t timerA, uint32_t 
         case 0xC0F06830:
         case 0xC0F06010:
         {
-            uint32_t expected = default_timerA[get_video_mode_index()] - 1;
+            uint32_t expected = get_default_timerA(get_video_mode_index()) - 1;
 
             if (old_val == expected)
             {
@@ -978,7 +1113,7 @@ static inline uint32_t reg_override_fps(uint32_t reg, uint32_t timerA, uint32_t 
         case 0xC0F06008:
         case 0xC0F0600C:
         {
-            uint32_t expected = default_timerA[get_video_mode_index()] - 1;
+            uint32_t expected = get_default_timerA(get_video_mode_index()) - 1;
             expected |= (expected << 16);
 
             if (old_val == expected)
@@ -991,7 +1126,7 @@ static inline uint32_t reg_override_fps(uint32_t reg, uint32_t timerA, uint32_t 
 
         case 0xC0F06014:
         {
-            uint32_t expected = default_timerB[get_video_mode_index()] - 1;
+            uint32_t expected = get_default_timerB(get_video_mode_index()) - 1;
 
             if (old_val == expected)
             {
@@ -1010,12 +1145,15 @@ static inline uint32_t reg_override_3X_tall(uint32_t reg, uint32_t old_val)
     /* change FPS timers to increase vertical resolution */
     if (video_mode_fps >= 50)
     {
-        int timerA = 400;
+        /* 5D3: timerA=400 (reduced from default 480 for 1:1 readout)
+         * 70D: scaled from default 800 by same ratio (400/480=0.833) → 667
+         * timerB = TG_FREQ_BASE / (timerA * target_fps) */
+        int timerA = is_70D ? 667 : 400;
 
         int timerB =
-            (video_mode_fps == 50) ? 1200 :
-            (video_mode_fps == 60) ? 1001 :
-                                       -1 ;
+            (video_mode_fps == 50) ? (is_70D ? 960 : 1200) :
+            (video_mode_fps == 60) ? (is_70D ? 799 : 1001) :
+            -1 ;
 
         int a = reg_override_fps(reg, timerA, timerB, old_val);
         if (a) return a;
@@ -1057,12 +1195,14 @@ static inline uint32_t reg_override_3x3_tall(uint32_t reg, uint32_t old_val)
     /* change FPS timers to increase vertical resolution */
     if (video_mode_fps >= 50)
     {
-        int timerA = 400;
+        /* 5D3: timerA=400 (reduced from default 480 for 3x3 binning)
+         * 70D: scaled from default 800 by same ratio → 667 */
+        int timerA = is_70D ? 667 : 400;
 
         int timerB =
-            (video_mode_fps == 50) ? 1200 :
-            (video_mode_fps == 60) ? 1001 :
-                                       -1 ;
+            (video_mode_fps == 50) ? (is_70D ? 960 : 1200) :
+            (video_mode_fps == 60) ? (is_70D ? 799 : 1001) :
+            -1 ;
 
         int a = reg_override_fps(reg, timerA, timerB, old_val);
         if (a) return a;
@@ -1109,14 +1249,16 @@ static inline uint32_t reg_override_3x3_48p(uint32_t reg, uint32_t old_val)
     /* change FPS timers to increase vertical resolution */
     if (video_mode_fps >= 50)
     {
+        /* 5D3: timerA=401/400 for 45p/48p targets
+         * 70D: scaled from default 800 by same ratio → 668/667 */
         int timerA =
-            (video_mode_fps == 50) ? 401 :
-            (video_mode_fps == 60) ? 400 :
-                                      -1 ;
+            (video_mode_fps == 50) ? (is_70D ? 668 : 401) :
+            (video_mode_fps == 60) ? (is_70D ? 667 : 400) :
+            -1 ;
         int timerB =
-            (video_mode_fps == 50) ? 1330 : /* 45p */
-            (video_mode_fps == 60) ? 1250 : /* 48p */
-                                       -1 ;
+            (video_mode_fps == 50) ? (is_70D ? 1065 : 1330) : /* 45p */
+            (video_mode_fps == 60) ? (is_70D ? 999 : 1250) : /* 48p */
+            -1 ;
 
         int a = reg_override_fps(reg, timerA, timerB, old_val);
         if (a) return a;
@@ -1150,16 +1292,18 @@ static inline uint32_t reg_override_3x3_48p(uint32_t reg, uint32_t old_val)
 static inline uint32_t reg_override_3K(uint32_t reg, uint32_t old_val)
 {
     /* FPS timer A, for increasing horizontal resolution */
-    /* 25p uses 480 (OK), 24p uses 440 (too small); */
+    /* 25p uses 480/800 (OK), 24p uses 440/700 (too small); */
     /* only override in 24p, 30p and 60p modes */
-    if (video_mode_fps != 25 && video_mode_fps !=  50)
+    if (video_mode_fps != 25 && video_mode_fps != 50)
     {
-        int timerA = 455;
+        /* 5D3: timerA=455 (wider than default 440 for 3072px)
+         * 70D: scaled from default 700 by same ratio (455/440=1.034) → 724 */
+        int timerA = is_70D ? 724 : 455;
         int timerB =
-            (video_mode_fps == 24) ? 2200 :
-            (video_mode_fps == 30) ? 1760 :
-            (video_mode_fps == 60) ?  880 :
-                                       -1 ;
+            (video_mode_fps == 24) ? (is_70D ? 1841 : 2200) :
+            (video_mode_fps == 30) ? (is_70D ? 1472 : 1760) :
+            (video_mode_fps == 60) ? (is_70D ? 735 : 880) :
+            -1 ;
 
         int a = reg_override_fps(reg, timerA, timerB, old_val);
         if (a) return a;
@@ -1182,18 +1326,20 @@ static inline uint32_t reg_override_4K_hfps(uint32_t reg, uint32_t old_val)
     /* FPS timer A, for increasing horizontal resolution */
     /* trial and error to allow 4096; 572 is too low, 576 looks fine */
     /* pick some values with small roundoff error */
-    int timerA =
-        (video_mode_fps < 30)  ?  585 : /* for 23.976/2 and 25/2 fps */
-                                  579 ; /* for all others */
+    /* 5D3: timerA=585/579 (wider than default 440 for 4096px)
+     * 70D: scaled from default 700 by ratio (585/440=1.33) → 931/921 */
+    int timerA = is_70D ?
+        ((video_mode_fps < 30) ? 931 : 921) :
+        ((video_mode_fps < 30) ? 585 : 579) ;
 
     /* FPS timer B, tuned to get half of the frame rate from Canon menu */
     int timerB =
-        (video_mode_fps == 24) ? 3422 :
-        (video_mode_fps == 25) ? 3282 :
-        (video_mode_fps == 30) ? 2766 :
-        (video_mode_fps == 50) ? 1658 :
-        (video_mode_fps == 60) ? 1383 :
-                                   -1 ;
+        (video_mode_fps == 24) ? (is_70D ? 2640 : 3422) :
+        (video_mode_fps == 25) ? (is_70D ? 2531 : 3282) :
+        (video_mode_fps == 30) ? (is_70D ? 2134 : 2766) :
+        (video_mode_fps == 50) ? (is_70D ? 1266 : 1658) :
+        (video_mode_fps == 60) ? (is_70D ? 1057 : 1383) :
+        -1 ;
 
     int a = reg_override_fps(reg, timerA, timerB, old_val);
     if (a) return a;
@@ -1213,17 +1359,20 @@ static inline uint32_t reg_override_UHD(uint32_t reg, uint32_t old_val)
 {
     /* FPS timer A, for increasing horizontal resolution */
     /* trial and error to allow 3840; 536 is too low */
-    int timerA = 
-        (video_mode_fps == 25) ? 547 :
-        (video_mode_fps == 50) ? 546 :
-                                 550 ;
+    /* 5D3: timerA=550/547/546 (wider than default 440 for 3840px)
+     * 70D: scaled from default 700 by ratio (550/440=1.25) → 875/869/867 */
+    int timerA = is_70D ?
+        ((video_mode_fps == 25) ? 869 :
+         (video_mode_fps == 50) ? 867 : 875) :
+        ((video_mode_fps == 25) ? 547 :
+         (video_mode_fps == 50) ? 546 : 550) ;
     int timerB =
-        (video_mode_fps == 24) ? 1820 :
-        (video_mode_fps == 25) ? 1755 :
-        (video_mode_fps == 30) ? 1456 :
-        (video_mode_fps == 50) ?  879 :
-        (video_mode_fps == 60) ?  728 :
-                                   -1 ;
+        (video_mode_fps == 24) ? (is_70D ? 1403 : 1820) :
+        (video_mode_fps == 25) ? (is_70D ? 1348 : 1755) :
+        (video_mode_fps == 30) ? (is_70D ? 1121 : 1456) :
+        (video_mode_fps == 50) ? (is_70D ? 676 : 879) :
+        (video_mode_fps == 60) ? (is_70D ? 560 : 728) :
+        -1 ;
 
     int a = reg_override_fps(reg, timerA, timerB, old_val);
     if (a) return a;
@@ -1329,19 +1478,23 @@ static inline uint32_t reg_override_fps_nocheck(uint32_t reg, uint32_t timerA, u
 static inline uint32_t reg_override_zoom_fps(uint32_t reg, uint32_t old_val)
 {
     /* attempt to reconfigure the x5 zoom at the FPS selected in Canon menu */
-    int timerA = 
-        (video_mode_fps == 24) ? 512 :
-        (video_mode_fps == 25) ? 512 :
-        (video_mode_fps == 30) ? 520 :
-        (video_mode_fps == 50) ? 512 :  /* cannot get 50, use 25 */
-        (video_mode_fps == 60) ? 520 :  /* cannot get 60, use 30 */
-                                  -1 ;
+    /* 5D3: timerA=512/520 (x5 zoom mode, different from normal default)
+     * 70D: scaled from 70D x5 zoom defaults (timerA=672 at 60p)
+     *      using ratio 512/440≈1.164 → 700*1.164≈815 for 24/25p
+     *      and 520/440≈1.182 → 700*1.182≈827 for 30/60p */
+    int timerA =
+        (video_mode_fps == 24) ? (is_70D ? 815 : 512) :
+        (video_mode_fps == 25) ? (is_70D ? 815 : 512) :
+        (video_mode_fps == 30) ? (is_70D ? 827 : 520) :
+        (video_mode_fps == 50) ? (is_70D ? 815 : 512) : /* cannot get 50, use 25 */
+        (video_mode_fps == 60) ? (is_70D ? 827 : 520) : /* cannot get 60, use 30 */
+        -1 ;
     int timerB =
-        (video_mode_fps == 24) ? 1955 :
-        (video_mode_fps == 25) ? 1875 :
-        (video_mode_fps == 30) ? 1540 :
-        (video_mode_fps == 50) ? 1875 :
-        (video_mode_fps == 60) ? 1540 :
+        (video_mode_fps == 24) ? (is_70D ? 1505 : 1955) :
+        (video_mode_fps == 25) ? (is_70D ? 1444 : 1875) :
+        (video_mode_fps == 30) ? (is_70D ? 1188 : 1540) :
+        (video_mode_fps == 50) ? (is_70D ? 1444 : 1875) :
+        (video_mode_fps == 60) ? (is_70D ? 1188 : 1540) :
                                    -1 ;
 
     return reg_override_fps_nocheck(reg, timerA, timerB, old_val);
@@ -1384,9 +1537,27 @@ static void FAST engio_write_hook(uint32_t* regs, uint32_t* stack, uint32_t pc)
         uint32_t old = *(buf+1);
         if (reg == 0xC0F06804)
         {
-            engio_vidmode_ok = (crop_preset == CROP_PRESET_CENTER_Z)
-                ? (old == 0x56601EB)                        /* x5 zoom */
-                : (old == 0x528011B || old == 0x2B6011B);   /* 1080p or 720p */
+            if (crop_preset == CROP_PRESET_CENTER_Z)
+            {
+                /* x5 zoom: 5D3 = 0x56601EB, 70D likely similar but different */
+                engio_vidmode_ok = (is_5D3) ? (old == 0x56601EB) : (old >> 16 > 1000);
+            }
+            else
+            {
+                /* 1080p or 720p: 5D3 = 0x528011B or 0x2B6011B */
+                if (is_5D3)
+                {
+                    engio_vidmode_ok = (old == 0x528011B || old == 0x2B6011B);
+                }
+                else if (is_70D)
+                {
+                    /* 70D 1080p: end line around 1290-1320, column around 0x11B*8
+                     * Accept values with end line in typical 1080p/720p range */
+                    int end_line = old >> 16;
+                    int end_col = old & 0xFFFF;
+                    engio_vidmode_ok = (end_line > 500 && end_line < 2000 && end_col > 0x100 && end_col < 0x200);
+                }
+            }
         }
     }
 
@@ -1651,12 +1822,42 @@ static void center_canon_preview()
     if (x2 - x1 != 299 && y2 - y1 != 792)
     {
         /* not x5/x10 (values hardcoded for 5D3) */
-        sei(old);
-        return;
+        /* 70D zoom window may have different dimensions - skip for safety */
+        if (!is_70D)
+        {
+            sei(old);
+            return;
+        }
     }
 
-    int raw_xc = (146 + 3744) / 2 / 4;  /* hardcoded for 5D3 */
-    int raw_yc = ( 60 + 1380) / 2;      /* values from old raw.c */
+    int raw_xc, raw_yc;
+    int skip_left_val = is_70D ? 144 : 146;
+    int skip_top_val = is_70D ? 28 : 60;
+    int raw_width = is_70D ? 5472 : 5796;
+    int raw_height = is_70D ? 3648 : 3870;
+
+    raw_xc = (skip_left_val + raw_width) / 2 / 4;
+    raw_yc = (skip_top_val + (raw_height / 3)) / 2;
+
+    if (1)
+    {
+        /* use the focus box position for moving the preview window around */
+        /* don't do that while recording! */
+        dbg_printf("[crop_rec] %d,%d ", raw_xc, raw_yc);
+        raw_xc -= skip_left_val / 2 / 4; raw_yc -= skip_top_val / 2;
+        /* this won't change the position if the focus box is centered */
+        get_afframe_pos(raw_xc * 2, raw_yc * 2, &raw_xc, &raw_yc);
+        raw_xc += skip_left_val / 2 / 4; raw_yc += skip_top_val / 2;
+        raw_xc &= ~1; /* just for consistency */
+        raw_yc &= ~1; /* this must be even, otherwise the image turns pink */
+        int x_min = is_70D ? 144 : 176;
+        int x_max = is_70D ? 680 : 770;
+        int y_min = is_70D ? 400 : 444;
+        int y_max = is_70D ? 900 : 950;
+        raw_xc = COERCE(raw_xc, x_min, x_max);
+        raw_yc = COERCE(raw_yc, y_min, y_max);
+        dbg_printf("-> %d,%d using focus box position\n", raw_xc, raw_yc);
+    }
 
     if (1)
     {
@@ -1912,26 +2113,27 @@ static unsigned int raw_info_update_cbr(unsigned int unused)
                 raw_capture_info.binning_y = 1; raw_capture_info.skipping_y = 0;
                 break;
 
-            case CROP_PRESET_3x3_1X:
-            case CROP_PRESET_3x3_1X_48p:
-            case CROP_PRESET_3x1:
-            {
-                int b = (is_5D3) ? 3 : 1;
-                int s = (is_5D3) ? 0 : 2;
-                raw_capture_info.binning_y = b; raw_capture_info.skipping_y = s;
-                break;
-            }
+    case CROP_PRESET_3x3_1X:
+    case CROP_PRESET_3x3_1X_48p:
+    case CROP_PRESET_3x1:
+    {
+        int b = (is_5D3) ? 3 : 1;
+        int s = (is_5D3) ? 0 : 2;
+        raw_capture_info.binning_y = b;
+        raw_capture_info.skipping_y = s;
+        break;
+    }
             default:
                 break;
         }
 
-        if (is_5D3)
-        {
-            /* update skip offsets */
-            int skip_left, skip_right, skip_top, skip_bottom;
-            calc_skip_offsets(&skip_left, &skip_right, &skip_top, &skip_bottom);
-            raw_set_geometry(raw_info.width, raw_info.height, skip_left, skip_right, skip_top, skip_bottom);
-        }
+    if (is_5D3 || is_70D)
+    {
+        /* update skip offsets */
+        int skip_left, skip_right, skip_top, skip_bottom;
+        calc_skip_offsets(&skip_left, &skip_right, &skip_top, &skip_bottom);
+        raw_set_geometry(raw_info.width, raw_info.height, skip_left, skip_right, skip_top, skip_bottom);
+    }
     }
     return 0;
 }
@@ -2003,22 +2205,40 @@ static unsigned int crop_rec_init()
         crop_rec_menu[0].help       = crop_choices_help_basic;
         crop_rec_menu[0].help2      = crop_choices_help2_basic;
     }       
+    else if (is_camera("70D", "1.1.2"))
+    {
+        CMOS_WRITE = 0x26B54;
+        MEM_CMOS_WRITE = 0xE92D41F0;
+
+        ADTG_WRITE = 0x2684C;
+        MEM_ADTG_WRITE = 0xE92D47F0;
+
+        ENGIO_WRITE = 0xFF2BC6C4;
+        MEM_ENGIO_WRITE = 0xE51FC15C;
+
+        is_70D = 1;
+        crop_presets = crop_presets_70d;
+        crop_rec_menu[0].choices = crop_choices_70d;
+        crop_rec_menu[0].max = COUNT(crop_choices_70d) - 1;
+        crop_rec_menu[0].help = crop_choices_help_70d;
+        crop_rec_menu[0].help2 = crop_choices_help2_70d;
+    }
     else if (is_camera("6D", "1.1.6"))
     {
         CMOS_WRITE = 0x2420C;
-        MEM_CMOS_WRITE = 0xE92D41F0;        
-        
+        MEM_CMOS_WRITE = 0xE92D41F0;
+
         ADTG_WRITE = 0x24108;
-        MEM_ADTG_WRITE = 0xE92D41F0;
-        
+        MEM_ADTG_WRITE = 0xE92D47F0;
+
         is_6D = 1;
         is_basic = 1;
-        crop_presets                = crop_presets_basic;
-        crop_rec_menu[0].choices    = crop_choices_basic;
-        crop_rec_menu[0].max        = COUNT(crop_choices_basic) - 1;
-        crop_rec_menu[0].help       = crop_choices_help_basic;
-        crop_rec_menu[0].help2      = crop_choices_help2_basic;
-    }      
+        crop_presets = crop_presets_basic;
+        crop_rec_menu[0].choices = crop_choices_basic;
+        crop_rec_menu[0].max = COUNT(crop_choices_basic) - 1;
+        crop_rec_menu[0].help = crop_choices_help_basic;
+        crop_rec_menu[0].help2 = crop_choices_help2_basic;
+    }
     menu_add("Movie", crop_rec_menu, COUNT(crop_rec_menu));
     lvinfo_add_items (info_items, COUNT(info_items));
 

@@ -84,7 +84,7 @@
 #define GMT_FUNCTABLE 0xFFA15B54
 
 #define CURRENT_GUI_MODE (*(int*)0x909E4)                   // in SetGUIRequestMode
-// #define ISO_ADJUSTMENT_ACTIVE ((*(int*)(0x94310)) == 0xF)       // nikfreak ok found by alex dec ptpNotifyOlcInfoChanged and look for: if arg1 == 1: MEM(0x79B8) = *(arg2)
+// ISO_ADJUSTMENT_ACTIVE removed - was never verified, address 0x94310 unconfirmed
 
 // from a screenshot
 #define COLOR_FG_NONLV 1
@@ -260,9 +260,10 @@
 #define FRAME_BV ((int)FRAME_SHUTTER + (int)FRAME_APERTURE - (int)FRAME_ISO)
 
 // see "Malloc Information"
-// #define FRAME_SHUTTER_BLANKING_ZOOM   (*(uint16_t*)0x40452180) // ADTG register 805f
-// #define FRAME_SHUTTER_BLANKING_NOZOOM (*(uint16_t*)0x40452184) // ADTG register 8061
-
+// FRAME_SHUTTER_BLANKING registers - disabled, never verified on 70D
+// Addresses from ADTG registers 805f/8061, values change with zoom state
+// #define FRAME_SHUTTER_BLANKING_ZOOM   (*(uint16_t*)0x40452180)
+// #define FRAME_SHUTTER_BLANKING_NOZOOM (*(uint16_t*)0x40452184)
 // #define FRAME_SHUTTER_BLANKING_READ   (lv_dispsize > 1 ? FRAME_SHUTTER_BLANKING_NOZOOM : FRAME_SHUTTER_BLANKING_ZOOM)
 // #define FRAME_SHUTTER_BLANKING_WRITE  (lv_dispsize > 1 ? &FRAME_SHUTTER_BLANKING_ZOOM : &FRAME_SHUTTER_BLANKING_NOZOOM)
 
@@ -271,7 +272,12 @@
 #define SRM_BUFFER_SIZE 0x2314000
 #define SRM_MAX_BUF_COUNT_VIDEO_MODE 16 // probably not the true max, D45 cams all guess 16 and non-fatally fail if using too much
 
-//TODO: Check if this hack works again or not :(
+/* UNAVI_BASE workaround - 70D lacks CancelUnaviFeedBackTimer function.
+ * These registers detect half-shutter press and exposure comp button state.
+ * UNAVI changes to value 2 when half-shutter is held.
+ * UNAVI_AV changes when exposure compensation button is pressed.
+ * Used for detecting when Canon's bottom info bar is displayed.
+ */
 #define UNAVI_BASE (0x9FC74)
 #define UNAVI (MEM(UNAVI_BASE + 0x24)) // 70D has no CancelUnaviFeedBackTimer, still this changes to value 2 when you keep HS pressed
 #define UNAVI_AV (MEM(UNAVI_BASE + 0x58)) // Same as above, but this location is linked to the exp comp button
@@ -281,6 +287,13 @@
 #define DISPLAY_ORIENTATION MEM(0x7B464) // read-only; string: UpdateReverseTFT.
 
 #define JUDGE_BOTTOM_INFO_DISP_TIMER_STATE    0x9FCCC
+
+// ROM sizes for 70D — ROM0 is 8MB (smaller than DIGIC V default 16MB).
+// ROM1 is 16MB like all other DIGIC V cameras (6D, 5D3, 700D, 100D, EOSM).
+// The previous 8MB override was based on a truncated ROM dump; stubs like
+// audio_thresholds (0xFFA1844C = offset 10.09MB) require the full 16MB.
+#define ROM0_SIZE 0x00800000 // 8MB (default 0x01000000 = 16MB)
+#define ROM1_SIZE 0x01000000 // 16MB (DIGIC V default)
 
 // temperature convertion from raw-temperature to celsius
 // http://www.magiclantern.fm/forum/index.php?topic=9673.0

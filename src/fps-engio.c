@@ -49,13 +49,6 @@
 // out into per cam defines, since D678X cams don't all use the same
 // values as D45.
 //
-//#define FPS_REGISTER_A 0xC0F06008
-//#define FPS_REGISTER_B 0xC0F06014
-//#define FPS_REGISTER_CONFIRM_CHANGES 0xC0F06000
-//#define FPS_REGISTER_A_VALUE ((int) shamem_read(FPS_REGISTER_A))
-//#define FPS_REGISTER_A_DEFAULT_VALUE ((int) shamem_read(FPS_REGISTER_A+4))
-//#define FPS_REGISTER_B_VALUE ((int) shamem_read(FPS_REGISTER_B))
-//
 // In rom, our FPS_REGISTER_A is called AccumH, or sometimes AccumGain.
 // This is presumably an accumulator for sensor data that acts on horizontal rows.
 //
@@ -598,9 +591,10 @@ int get_current_shutter_reciprocal_x1000()
     float shutter = frame_duration * (max - blanking) / max;
     return (int)(1.0 / shutter * 1000);
 
-// TODO: Cleanup 70D once fps override feature is fixed
-// till then use the fallback. Do it this way to have fast ettr
-// and keep frame_shutter timer enabled in consts.h
+/* 70D excluded from this path via !defined(CONFIG_70D)
+ * FPS override is disabled in features.h due to Timer B issues.
+ * Timer A-only workaround exists (HiJello-FastTv) but causes banding.
+ */
 #elif defined(FRAME_SHUTTER_TIMER) && !defined(CONFIG_70D)
     int timer = FRAME_SHUTTER_TIMER;
 
@@ -643,12 +637,10 @@ int get_current_shutter_reciprocal_x1000()
     //
     // This function returns 1/EA and does all calculations on integer numbers, so actual computations differ slightly.
 
-    //#warning FIXME: consider defining FRAME_SHUTTER_BLANKING_READ
     /* this might use old FPS timer values updated by fps_task */
     /* it's not thread-safe to re-read them here again */
     return get_shutter_reciprocal_x1000(shutter_r_x1000, fps_timer_a, fps_timer_a_orig, fps_timer_b, fps_timer_b_orig);
 #else
-    //#warning FIXME: consider defining FRAME_SHUTTER_BLANKING_READ
     // fallback to APEX units
     if (!lens_info.raw_shutter)
         return 0;
