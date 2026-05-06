@@ -2117,7 +2117,7 @@ static MENU_UPDATE_FUNC(zoom_overlay_display)
     if (display_broken_for_mz())
         MENU_SET_WARNING(MENU_WARN_NOT_WORKING, "After using display filters, go outside LiveView and back.");
     #endif
-    #if !defined(CONFIG_6D) && !defined(CONFIG_5D3) && !defined(CONFIG_EOSM)
+    #if !defined(CONFIG_6D) && !defined(CONFIG_5D3) && !defined(CONFIG_EOSM) && !defined(CONFIG_70D)
     else if (is_movie_mode() && video_mode_fps > 30)
         MENU_SET_WARNING(MENU_WARN_NOT_WORKING, "Magic Zoom does not work well in current video mode");
     #endif
@@ -2994,11 +2994,31 @@ struct menu_entry zebra_menus[] = {
             {
                 .name = "Palette      ",
                 .priv = &falsecolor_palette,
-                .max = 5,
+                .max = 6,
                 .icon_type = IT_DICE,
-                .choices = CHOICES("Marshall", "SmallHD", "50-55%", "67-72%", "Banding detection", "GreenScreen"),
+                .choices = CHOICES("Marshall", "SmallHD", "50-55%", "67-72%", "Banding detection", "GreenScreen", "Custom Range"),
                 .update = falsecolor_display_palette,
                 .help = "False color palettes for exposure, banding, green screen...",
+                .depends_on = DEP_EXPSIM,
+                .children =  (struct menu_entry[]) {
+                    {
+                        .name = "Custom min IRE",
+                        .priv = &falsecolor_custom_min,
+                        .min = 0,
+                        .max = 100,
+                        .help = "IRE threshold below which pixels show as blue.",
+                        .depends_on = DEP_EXPSIM,
+                    },
+                    {
+                        .name = "Custom max IRE",
+                        .priv = &falsecolor_custom_max,
+                        .min = 0,
+                        .max = 100,
+                        .help = "IRE threshold above which pixels show as red.",
+                        .depends_on = DEP_EXPSIM,
+                    },
+                    MENU_EOL
+                }
             },
             MENU_EOL
         }
@@ -4100,13 +4120,6 @@ livev_hipriority_task( void* unused )
                 continue;
             }
         }
-        #if 0
-        draw_cropmark_area(); // just for debugging
-        struct vram_info * lv = get_yuv422_vram();
-        struct vram_info * hd = get_yuv422_hd_vram();
-        bmp_printf(FONT_MED, 100, 100, "ext:%d%d%d \nlv:%x %dx%d \nhd:%x %dx%d ", EXT_MONITOR_RCA, ext_monitor_hdmi, hdmi_code, lv->vram, lv->width, lv->height, hd->vram, hd->width, hd->height);
-        #endif
-
         #ifdef CONFIG_RAW_LIVEVIEW
         int raw_needed = 0;
 
@@ -4115,10 +4128,8 @@ livev_hipriority_task( void* unused )
         if (raw && lv_dispsize == 1 && !is_movie_mode())
         {
             /* only raw zebras, raw histogram and raw spotmeter are working in LV raw mode */
-            // 70D has problems with RAW zebras
-            // TODO: Adjust with appropriate internals-config: CONFIG_NO_RAW_ZEBRAS
-            // (is this name good?  We already have FEATURE_RAW_ZEBRAS...  what's the distinction?)
-            #if !defined(CONFIG_70D) && defined(FEATURE_RAW_ZEBRAS)
+            // 70D has problems with RAW zebras (CONFIG_NO_RAW_ZEBRAS defined in 70D internals)
+            #if defined(FEATURE_RAW_ZEBRAS) && !defined(CONFIG_NO_RAW_ZEBRAS)
             if (zebra_draw && raw_zebra_enable == 1) raw_needed = 1;        /* raw zebras: always */
             #endif
             #if defined(FEATURE_HISTOGRAM)
