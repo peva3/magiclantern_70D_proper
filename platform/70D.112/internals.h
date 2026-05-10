@@ -27,19 +27,13 @@
 /** This camera has a 3:2 screen, 720x480 **/
 #define CONFIG_3_2_SCREEN
 
-/** We only have a single red LED **/
-//~ #define CONFIG_BLUE_LED
-
-/** There is no LCD sensor that turns the display off **/
-//~ #define CONFIG_LCD_SENSOR
-
 /** This camera has a mirror lockup feature **/
 #define CONFIG_MLU
 
-/** This camera doesn't report focus info in LiveView **/
-//~ ToDo: Focus Confirmation in Magic Zoom does not work
+/** This camera doesn't report LV_FOCUS_DATA property, but we use PROP_LV_LENS focus_pos as alternative **/
+//~ Focus Confirmation in Magic Zoom uses lens position stability detection
 //~ see http://magiclantern.fm/forum/index.php?topic=14309.msg147257#msg147257
-//~ #define CONFIG_LV_FOCUS_INFO
+#define CONFIG_LV_FOCUS_INFO
 
 #define CONFIG_ELECTRONIC_LEVEL
 
@@ -48,7 +42,7 @@
 
 /** There is a Q menu in Play mode, with image protect, rate etc **/
 /** But it's a bit different from the other cameras, so let's say it doesn't have **/
-// #define CONFIG_Q_MENU_PLAYBACK
+#define CONFIG_Q_MENU_PLAYBACK
 
 /** This camera has a flip-out display **/
 #define CONFIG_VARIANGLE_DISPLAY
@@ -62,8 +56,8 @@
 /** Bulb mode is done by going to M mode and setting shutter speed beyond 30s **/
 #define CONFIG_SEPARATE_BULB_MODE
 
-/** We can't control audio settings from ML, YET! **/
-//~ #define CONFIG_AUDIO_CONTROLS
+/** We can control audio settings from ML now **/
+#define CONFIG_AUDIO_CONTROLS
 
 /** Zoom button can't be used while recording (for Magic Zoom) **/
 //~ #define CONFIG_ZOOM_BTN_NOT_WORKING_WHILE_RECORDING
@@ -88,18 +82,13 @@
 #define CONFIG_EXPSIM
 
 /** We can't playback sounds via ASIF DMA **/
-//~ #define CONFIG_BEEP
+#define CONFIG_BEEP
 
 /** This camera has no trouble saving Kelvin and/or WBShift in movie mode **/
-// #define CONFIG_WB_WORKAROUND
+#define CONFIG_WB_WORKAROUND
 
 /** We can restore ML files after formatting the card in the camera **/
 #define CONFIG_RESTORE_AFTER_FORMAT
-
-/** We know how to use DMA_MEMCPY, though I don't see any reason for doing so **/
-/** it's not really faster than plain memcpy, and the side effects are not yet fully understood **/
-/** (read: I'm too dumb to understand why it's better than memcpy and why it's safe to use) **/
-//~ #define CONFIG_DMA_MEMCPY
 
 /** We know how to use edmac_memcpy. This one is really fast (600MB/s!) */
 #define CONFIG_EDMAC_MEMCPY
@@ -144,8 +133,8 @@
 /** You can configure separate AFMA values for both wide and tele ends */
 #define CONFIG_AFMA_WIDE_TELE
 
-/** Hide Canon bottom bar from DebugMsg hook */
-//#define CONFIG_LVAPP_HACK_DEBUGMSG
+/** Hide Canon bottom bar from DebugMsg hook - enabled to help with FlexInfo flickering */
+#define CONFIG_LVAPP_HACK_DEBUGMSG
 
 /** Workaround for menu timeout in LiveView */
 #define CONFIG_MENU_TIMEOUT_FIX
@@ -154,10 +143,19 @@
  *  Workaround: block the shutter button while switching zoom, to avoid the race condition
  *  todo: find a proper fix that does not prevent picture taking
  */
-//~ #define CONFIG_ZOOM_HALFSHUTTER_UILOCK
+#define CONFIG_ZOOM_HALFSHUTTER_UILOCK
 
 /** this method bypasses Canon's lv_save_raw and slurps the raw data directly from connection #0 */
 #define CONFIG_EDMAC_RAW_SLURP
+
+/** RAW zebras cause visual glitches in QuickReview and LiveView on 70D */
+/* Investigation (2026-04-28): Root cause is likely Dual Pixel CMOS AF pixels         */
+/* embedded in sensor with different photometric response, causing false readings.    */
+/* Single-buffer EDMAC RAW SLURP race condition is secondary contributor.             */
+/* Fix requires: focus pixel map (FPM) for 70D to mask Dual Pixel AF pixels, or      */
+/* double-buffering in edmac_raw_slurp() for stable frame readout.                    */
+/* See: modules/crop_rec/crop_presets.h for focus pixel handling                      */
+#define CONFIG_NO_RAW_ZEBRAS
 
 #define CONFIG_MALLOC_STRUCT_V2
 
