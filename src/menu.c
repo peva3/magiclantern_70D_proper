@@ -1469,12 +1469,10 @@ static void menu_remove_entry(struct menu * menu, struct menu_entry * entry)
     }
     if (entry->prev)
     {
-        // printf("link %s to %x\n", entry->prev->name, entry->next);
         entry->prev->next = entry->next;
     }
     if (entry->next)
     {
-        // printf("link %s to %x\n", entry->next->name, entry->prev);
         entry->next->prev = entry->prev;
     }
     
@@ -1485,7 +1483,6 @@ static void menu_remove_entry(struct menu * menu, struct menu_entry * entry)
         struct menu * submenu = menu_find_by_name( entry->name, ICON_ML_SUBMENU);
         if (submenu)
         {
-            // printf("unlink submenu %s\n", submenu->name);
             submenu->children = 0;
         }
     }
@@ -1495,7 +1492,6 @@ static void menu_remove_entry(struct menu * menu, struct menu_entry * entry)
     {
         if (streq(placeholder->name, entry->name))
         {
-            // printf("restore placeholder %s\n", entry->name);
             struct menu_entry restored_placeholder = MENU_PLACEHOLDER(placeholder->name);
             placeholder_copy(placeholder, &restored_placeholder);
             break;
@@ -5437,15 +5433,6 @@ handle_ml_menu_keys(struct event * event)
         //~ menu_hidden_should_display_help = 0;
         break;
 
-#if 0
-    case BGMT_PLAY:
-        if (menu_help_active) { menu_help_active = 0; /* menu_damage = 1; */ break; }
-        menu_entry_select( menu, 1 ); // decrement
-        menu_needs_full_redraw = 1;
-        //~ menu_damage = 1;
-        //~ menu_hidden_should_display_help = 0;
-        break;
-#endif
 #ifdef CONFIG_TOUCHSCREEN
     case BGMT_TOUCH_1_FINGER:
     case BGMT_TOUCH_2_FINGER:
@@ -6292,60 +6279,6 @@ int handle_ml_menu_erase(struct event *event)
 
 // SJE logging GUIMODE
 //    DryosDebugMsg(0, 15, "guimode: %d", CURRENT_GUI_MODE);
-
-#if 0
-// SJE bubbles hack for fun
-    int n = 1 + rand() % 12;
-    while(n)
-    {
-        int x = 30 + rand() % 600;
-        int y = 30 + rand() % 400;
-        int c = 1 + rand() % 10;
-        int r = 20 + rand() % 40;
-        fill_circle(x, y, r, c);
-        n--;
-    }
-#endif
-
-#if 0
-// bmp_draw_scaled_ex() testing
-    static struct bmp_file_t *image = NULL;
-    if (image == NULL)
-        image = bmp_load("B:/256test.bmp", 0);
-    if (image != NULL)
-    {
-        bmp_draw_scaled_ex(image, 240, 240,
-                           image->width, image->height,
-                           0);
-    }
-#endif
-
-
-#if 0
-    // these are Gryp related logging callbacks
-    // and log threshold values
-    extern int uart_printf(const char * fmt, ...);
-    if (MEM(0x115d8) == NULL)
-    {
-        MEM(0x115d8) = &uart_printf;
-    }
-    else
-    {
-        DryosDebugMsg(0, 15, "*115d8        : 0x%x", MEM(0x115d8));
-    }
-    // this is something like log priority threshold
-    MEM(0x115e0) = 0x0000ffff;
-
-    if (MEM(0x115e4) == NULL)
-    {
-        MEM(0x115e4) = &uart_printf;
-    }
-    else
-    {
-        DryosDebugMsg(0, 15, "*115e4        : 0x%x", MEM(0x115e4));
-    }
-    MEM(0x115d4) = 0x0000ffff;
-#endif
 
     if (event->param == BGMT_TRASH ||
         #ifdef CONFIG_TOUCHSCREEN

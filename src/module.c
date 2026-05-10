@@ -225,288 +225,6 @@ static void module_update_core_symbols(TCCState* state)
 //
 // Copying in the version in tcc/tcc.h, which is terribly ugly just for
 // finding the module load address.  There must be a better way.
-#if 0
-#include <setjmp.h>
-#define addr_t uint32_t
-#define IO_BUF_SIZE 8192
-#define INCLUDE_STACK_SIZE  32
-#define IFDEF_STACK_SIZE    64
-#define CACHED_INCLUDES_HASH_SIZE 512
-#define PACK_STACK_SIZE     8
-#define LDOUBLE_SIZE  8
-
-typedef struct DLLReference {
-    int level;
-    void *handle;
-    char name[1];
-} DLLReference;
-
-typedef struct CString {
-    int size; /* size in bytes */
-    void *data; /* either 'char *' or 'nwchar_t *' */
-    int size_allocated;
-    void *data_allocated; /* if non NULL, data has been malloced */
-} CString;
-
-/* type definition */
-typedef struct CType {
-    int t;
-    struct Sym *ref;
-} CType;
-
-/* constant value */
-typedef union CValue {
-    long double ld;
-    double d;
-    float f;
-    int i;
-    unsigned int ui;
-    unsigned int ul; /* address (should be unsigned long on 64 bit cpu) */
-    long long ll;
-    unsigned long long ull;
-    struct CString *cstr;
-    void *ptr;
-    int tab[LDOUBLE_SIZE/4];
-} CValue;
-
-/* value on stack */
-typedef struct SValue {
-    CType type;      /* type */
-    unsigned short r;      /* register + flags */
-    unsigned short r2;     /* second register, used for 'long long'
-                              type. If not used, set to VT_CONST */
-    CValue c;              /* constant, if VT_CONST */
-    struct Sym *sym;       /* symbol, if (VT_SYM | VT_CONST) */
-} SValue;
-
-typedef struct Sym {
-    int v;    /* symbol token */
-    char *asm_label;    /* associated asm label */
-    long r;    /* associated register */
-    union {
-        long c;    /* associated number */
-        int *d;   /* define token stream */
-    };
-    CType type;    /* associated type */
-    union {
-        struct Sym *next; /* next related symbol */
-        long jnext; /* next jump label */
-    };
-    struct Sym *prev; /* prev symbol in stack */
-    struct Sym *prev_tok; /* previous symbol for this token */
-} Sym;
-
-typedef struct Section {
-    unsigned long data_offset; /* current data offset */
-    unsigned char *data;       /* section data */
-    unsigned long data_allocated; /* used for realloc() handling */
-    int sh_name;             /* elf section name (only used during output) */
-    int sh_num;              /* elf section number */
-    int sh_type;             /* elf section type */
-    int sh_flags;            /* elf section flags */
-    int sh_info;             /* elf section info */
-    int sh_addralign;        /* elf section alignment */
-    int sh_entsize;          /* elf entry size */
-    unsigned long sh_size;   /* section size (only used during output) */
-    addr_t sh_addr;          /* address at which the section is relocated */
-    unsigned long sh_offset; /* file offset */
-    int nb_hashed_syms;      /* used to resize the hash table */
-    struct Section *link;    /* link to another section */
-    struct Section *reloc;   /* corresponding section for relocation, if any */
-    struct Section *hash;     /* hash table for symbols */
-    struct Section *next;
-    char name[1];           /* section name */
-} Section;
-
-typedef struct CachedInclude {
-    int ifndef_macro;
-    int hash_next; /* -1 if none */
-    char filename[1]; /* path specified in #include */
-} CachedInclude;
-
-typedef struct BufferedFile {
-    uint8_t *buf_ptr;
-    uint8_t *buf_end;
-    int fd;
-    struct BufferedFile *prev;
-    int line_num;    /* current line number - here to simplify code */
-    int ifndef_macro;  /* #ifndef macro / #endif search */
-    int ifndef_macro_saved; /* saved ifndef_macro */
-    int *ifdef_stack_ptr; /* ifdef_stack value at the start of the file */
-    char filename[1024];    /* filename */
-    unsigned char buffer[IO_BUF_SIZE + 1]; /* extra size for CH_EOB char */
-} BufferedFile;
-
-
-struct TCCState {
-
-    int verbose; /* if true, display some information during compilation */
-    int nostdinc; /* if true, no standard headers are added */
-    int nostdlib; /* if true, no standard libraries are added */
-    int nocommon; /* if true, do not use common symbols for .bss data */
-    int static_link; /* if true, static linking is performed */
-    int rdynamic; /* if true, all symbols are exported */
-    int symbolic; /* if true, resolve symbols in the current module first */
-    int alacarte_link; /* if true, only link in referenced objects from archive */
-
-    char *tcc_lib_path; /* CONFIG_TCCDIR or -B option */
-    char *soname; /* as specified on the command line (-soname) */
-    char *rpath; /* as specified on the command line (-Wl,-rpath=) */
-
-    /* output type, see TCC_OUTPUT_XXX */
-    int output_type;
-    /* output format, see TCC_OUTPUT_FORMAT_xxx */
-    int output_format;
-
-    /* C language options */
-    int char_is_unsigned;
-    int leading_underscore;
-    
-    /* warning switches */
-    int warn_write_strings;
-    int warn_unsupported;
-    int warn_error;
-    int warn_none;
-    int warn_implicit_function_declaration;
-
-    /* compile with debug symbol (and use them if error during execution) */
-    int do_debug;
-#ifdef CONFIG_TCC_BCHECK
-    /* compile with built-in memory and bounds checker */
-    int do_bounds_check;
-#endif
-
-    addr_t text_addr; /* address of text section */
-    int has_text_addr;
-
-    unsigned long section_align; /* section alignment */
-
-    char *init_symbol; /* symbols to call at load-time (not used currently) */
-    char *fini_symbol; /* symbols to call at unload-time (not used currently) */
-    
-#ifdef TCC_TARGET_I386
-    int seg_size; /* 32. Can be 16 with i386 assembler (.code16) */
-#endif
-
-    /* array of all loaded dlls (including those referenced by loaded dlls) */
-    DLLReference **loaded_dlls;
-    int nb_loaded_dlls;
-
-    /* include paths */
-    char **include_paths;
-    int nb_include_paths;
-
-    char **sysinclude_paths;
-    int nb_sysinclude_paths;
-
-    /* library paths */
-    char **library_paths;
-    int nb_library_paths;
-
-    /* crt?.o object path */
-    char **crt_paths;
-    int nb_crt_paths;
-
-    /* error handling */
-    void *error_opaque;
-    void (*error_func)(void *opaque, const char *msg);
-    int error_set_jmp_enabled;
-    jmp_buf error_jmp_buf;
-    int nb_errors;
-
-    /* output file for preprocessing (-E) */
-    FILE *ppfp;
-
-    /* for -MD/-MF: collected dependencies for this compilation */
-    char **target_deps;
-    int nb_target_deps;
-
-    /* compilation */
-    BufferedFile *include_stack[INCLUDE_STACK_SIZE];
-    BufferedFile **include_stack_ptr;
-
-    int ifdef_stack[IFDEF_STACK_SIZE];
-    int *ifdef_stack_ptr;
-
-    /* included files enclosed with #ifndef MACRO */
-    int cached_includes_hash[CACHED_INCLUDES_HASH_SIZE];
-    CachedInclude **cached_includes;
-    int nb_cached_includes;
-
-    /* #pragma pack stack */
-    int pack_stack[PACK_STACK_SIZE];
-    int *pack_stack_ptr;
-
-    /* inline functions are stored as token lists and compiled last
-       only if referenced */
-    struct InlineFunc **inline_fns;
-    int nb_inline_fns;
-
-    /* sections */
-    Section **sections;
-    int nb_sections; /* number of sections, including first dummy section */
-
-    Section **priv_sections;
-    int nb_priv_sections; /* number of private sections */
-
-    /* got & plt handling */
-    Section *got;
-    Section *plt;
-    struct sym_attr *sym_attrs;
-    int nb_sym_attrs;
-    /* give the correspondance from symtab indexes to dynsym indexes */
-    int *symtab_to_dynsym;
-
-    /* temporary dynamic symbol sections (for dll loading) */
-    Section *dynsymtab_section;
-    /* exported dynamic symbol section */
-    Section *dynsym;
-    /* copy of the gobal symtab_section variable */
-    Section *symtab;
-    /* tiny assembler state */
-    Sym *asm_labels;
-
-#ifdef TCC_TARGET_PE
-    /* PE info */
-    int pe_subsystem;
-    unsigned pe_file_align;
-    unsigned pe_stack_size;
-# ifdef TCC_TARGET_X86_64
-    Section *uw_pdata;
-    int uw_sym;
-    unsigned uw_offs;
-# endif
-#endif
-
-#ifdef TCC_IS_NATIVE
-    /* for tcc_relocate */
-    void *runtime_mem;
-# ifdef HAVE_SELINUX
-    void *write_mem;
-    unsigned long mem_size;
-# endif
-# if !defined TCC_TARGET_PE && (defined TCC_TARGET_X86_64 || defined TCC_TARGET_ARM)
-    /* write PLT and GOT here */
-    char *runtime_plt_and_got;
-    unsigned runtime_plt_and_got_offset;
-#  define TCC_HAS_RUNTIME_PLTGOT
-# endif
-#endif
-
-    /* used by main and tcc_parse_args only */
-    char **files; /* files seen on command line */
-    int nb_files; /* number thereof */
-    int nb_libraries; /* number of libs thereof */
-    char *outfile; /* output filename */
-    char *option_m; /* only -m32/-m64 handled */
-    int print_search_dirs; /* option */
-    int option_r; /* option -r */
-    int do_bench; /* option -bench */
-    int gen_deps; /* option -MD  */
-    char *deps_outfile; /* option -MF */
-};
-
-#endif
 
 static void _module_load_all(uint32_t list_only)
 {
@@ -594,18 +312,25 @@ static void _module_load_all(uint32_t list_only)
             }
             strncpy(module_list[module_cnt].name, module_name, sizeof(module_list[module_cnt].name));
             
-            /* check for a .en file that tells the module is enabled */
-            char enable_file[FIO_MAX_PATH_LENGTH];
-            snprintf(enable_file, sizeof(enable_file), "%s%s.en", get_config_dir(), module_list[module_cnt].name);
-            
-            /* if enable-file is nonexistent, dont load module */
-            if(!config_flag_file_setting_load(enable_file))
-            {
-                module_list[module_cnt].enabled = 0;
-                snprintf(module_list[module_cnt].status, sizeof(module_list[module_cnt].status), "OFF");
-                snprintf(module_list[module_cnt].long_status, sizeof(module_list[module_cnt].long_status), "Module disabled");
-                //printf("  [i] %s\n", module_list[module_cnt].long_status);
-            }
+/* check for a .en file that tells the module is enabled */
+char enable_file[FIO_MAX_PATH_LENGTH];
+char* cfg_dir = get_config_dir();
+snprintf(enable_file, sizeof(enable_file), "%s%s.en", cfg_dir, module_list[module_cnt].name);
+/* if enable-file is nonexistent, dont load module */
+int en_exists = config_flag_file_setting_load(enable_file);
+printf(" [i] Check enable: cfg='%s' file='%s' -> %d\n", cfg_dir, enable_file, en_exists);
+#ifdef CONFIG_QEMU
+/* Force-enable all modules for QEMU testing (config system not initialized yet) */
+en_exists = 1;
+printf(" [i] QEMU: forcing all modules enabled for testing\n");
+#endif
+if(!en_exists)
+{
+    module_list[module_cnt].enabled = 0;
+    snprintf(module_list[module_cnt].status, sizeof(module_list[module_cnt].status), "OFF");
+    snprintf(module_list[module_cnt].long_status, sizeof(module_list[module_cnt].long_status), "Module disabled");
+    //printf(" [i] %s\n", module_list[module_cnt].long_status);
+}
             else
             {
                 module_list[module_cnt].enabled = 1;
@@ -673,24 +398,6 @@ static void _module_load_all(uint32_t list_only)
             // don't know why.  Instead I am dumping some function address
             // from whatever module I'm testing, which is annoyingly module
             // specific
-#if 0
-            int size = 0;
-            void *data_addr = NULL;
-            data_addr = tcc_get_section_ptr(state, ".text", &size);
-            DryosDebugMsg(0, 15, "loading module: %s", module_list[mod].filename);
-            DryosDebugMsg(0, 15, "module priv: 0x%x", module_list[mod].cbr);
-            DryosDebugMsg(0, 15, "module .text: 0x%x", data_addr);
-            DryosDebugMsg(0, 15, "module text_addr: 0x%x", state->text_addr);
-//            DryosDebugMsg(0, 15, "sections: %d", state->nb_sections);
-//            for (int ii = 1; ii < state->nb_sections; ii++)
-//            {
-//                Section *s = state->sections[ii];
-//                DryosDebugMsg(0, 15, "section: %s", s->name);
-//                DryosDebugMsg(0, 15, "section sh_addr: 0x%x", s->sh_addr);
-//                DryosDebugMsg(0, 15, "section data_offset: 0x%x", s->data_offset);
-//                DryosDebugMsg(0, 15, "section data: 0x%x", s->data);
-//            }
-#endif
 
             module_list[mod].valid = 1;
 
@@ -810,13 +517,14 @@ static void _module_load_all(uint32_t list_only)
     /* before we execute code, make sure a) data caches are drained and b) instruction caches are clean */
     sync_caches();
     
-    /* go through all modules and initialize them */
-    printf("Init modules...\n");
-    for (uint32_t mod = 0; mod < module_cnt; mod++)
+/* go through all modules and initialize them */
+printf("Init modules... (count=%d)\n", module_cnt);
+for (uint32_t mod = 0; mod < module_cnt; mod++)
+{
+    printf(" [i] Module %d: '%s' valid=%d enabled=%d error=%d\n", mod, module_list[mod].name, module_list[mod].valid, module_list[mod].enabled, module_list[mod].error);
+    if(module_list[mod].valid && module_list[mod].enabled && !module_list[mod].error)
     {
-        if(module_list[mod].valid && module_list[mod].enabled && !module_list[mod].error)
-        {
-            printf("  [i] Init: '%s'\n", module_list[mod].name);
+        printf(" [i] Init: '%s'\n", module_list[mod].name);
             if(0)
             {
                 printf("  [i] info    at: 0x%08X\n", (uint32_t)module_list[mod].info);
@@ -2163,7 +1871,33 @@ static void module_unload_offline_strings(int mod_number)
     }
 }
 
-static void module_load_task(void* unused) 
+#ifdef CONFIG_QEMU
+/* QEMU: Synchronous module loading for reliable testing */
+static void do_module_load_task(void* unused)
+{
+    /* Load modules synchronously during init (no task loop) */
+    _module_load_all(0);
+    module_menu_update();
+
+    /* QEMU: Exit task after loading (no loop) */
+    return;
+}
+
+/* Wrapper for synchronous loading during init */
+void module_load_all_for_qemu(void)
+{
+    printf("[QEMU] Loading modules synchronously...\n");
+    do_module_load_task(0);
+    printf("[QEMU] Modules loaded.\n");
+}
+
+static void module_load_task(void* unused)
+{
+    do_module_load_task(unused);
+}
+#else
+/* Hardware: Async module loading with crash recovery */
+static void module_load_task(void* unused)
 {
     char *lockstr = "If you can read this, ML crashed last time. To save from faulty modules, autoload gets disabled.";
 
@@ -2184,7 +1918,7 @@ static void module_load_task(void* unused)
                 FIO_WriteFile(handle, lockstr, strlen(lockstr));
                 FIO_CloseFile(handle);
             }
-            
+
             /* now load modules */
             _module_load_all(0);
             module_menu_update();
@@ -2220,11 +1954,12 @@ static void module_load_task(void* unused)
                 break;
             }
             
-            default:
-                printf("invalid msg: %d\n", msg);
+        default:
+            printf("invalid msg: %d\n", msg);
         }
     }
 }
+#endif /* CONFIG_QEMU */
 
 void module_save_configs()
 {
@@ -2241,7 +1976,7 @@ void module_save_configs()
             uint32_t ret = module_config_save(filename, &module_list[mod]);
             if(ret)
             {
-                printf("  [E] Error: %d\n", ret);
+                printf(" [E] Error: %d\n", ret);
             }
         }
     }
@@ -2260,7 +1995,13 @@ int module_shutdown()
     return 0;
 }
 
+#ifdef CONFIG_QEMU
+/* QEMU: High priority (0x19) for reliable module loading within timeout */
+TASK_CREATE("module_task", module_load_task, 0, 0x19, 0x4000 );
+#else
+/* Hardware: Normal priority (0x1e) */
 TASK_CREATE("module_task", module_load_task, 0, 0x1e, 0x4000 );
+#endif
 
 INIT_FUNC(__FILE__, module_init);
 

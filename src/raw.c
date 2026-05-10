@@ -112,9 +112,13 @@ static int (*dual_iso_get_dr_improvement)() = MODULE_FUNCTION(dual_iso_get_dr_im
 // please remove this part of the comment.
 
 #ifndef DEFAULT_RAW_BUFFER_SIZE
+#ifdef CONFIG_EDMAC_RAW_SLURP
+/* EDMAC raw slurp: buffer allocated from SRM (see RAW_LV_BUFFER_ALLOC_SIZE below) */
+#define DEFAULT_RAW_BUFFER_SIZE (SRM_BUFFER_SIZE - 0x1000)
+#else
 /* todo: figure out how much Canon code allocates for their LV RAW buffer - how? */
-#pragma message "FIXME: using dummy DEFAULT_RAW_BUFFER_SIZE"
 #define DEFAULT_RAW_BUFFER_SIZE (9*1024*1024)
+#endif
 #endif
 
 /* for higher resolutions we'll allocate a new buffer, as needed */
@@ -1307,33 +1311,6 @@ int raw_update_params_work()
         /* return failure, and make sure the black level is recomputed at next call */
         dirty = 1;
 
-        #if 0
-        static int first_bad_frame = 1;
-        if (first_bad_frame)
-        {
-            /* for debugging: if black check fails, save the bad frame as DNG */
-            first_bad_frame = 0;
-
-            /* make a copy of the raw buffer, because it's being updated while we are saving it */
-            void* buf = malloc(raw_info.frame_size);
-            if (buf)
-            {
-                memcpy(buf, raw_info.buffer, raw_info.frame_size);
-                // On modern cams, save_dng() doesn't yet work, cause unknown.
-                // To save something there, uncomment dump_seg() line.
-                // tools/image/image_buffer_guesser/display_buf.py can be used
-                // to view and save the buffer data.
-                //dump_seg(buf, raw_info.frame_size, "raw.dmp");
-                char filename[50];
-                get_numbered_file_name("bad%02d.dng", 99, filename, sizeof(filename));
-                struct raw_info local_raw_info = raw_info;
-                local_raw_info.buffer = buf;
-                save_dng(filename, &local_raw_info);
-                free(buf);
-            }
-        }
-        #endif
-
         dbg_printf("Black check error\n");
         return 0;
     }
@@ -1915,11 +1892,6 @@ static int autodetect_black_level(int* black_mean, int* black_stdev_x100)
     int mean2 = 0;
     int stdev2 = 0;
 
-//    bmp_printf(FONT_MED, 30, 210, "a_b_l: %d, %d, %d, %d",
-//               raw_info.active_area.x1,
-//               raw_info.active_area.x2,
-//               raw_info.active_area.y1,
-//               raw_info.active_area.y2);
     if (raw_info.active_area.x1 > 50) /* use the left black bar for black calibration */
     {
         // FIXME SJE are these magic numbers still appropriate for all cams?
@@ -2624,7 +2596,7 @@ void raw_lv_request_bpp(int bpp)
             MODE_12BIT = 0x010,
             MODE_10BIT = 0x000,
         };
-    #elif defined(CONFIG_200D) | defined(CONFIG_6D2) | defined(CONFIG_7D2)
+    #elif defined(CONFIG_200D) || defined(CONFIG_6D2) || defined(CONFIG_7D2)
     // FIXME currently doesn't do anything for 6D2 or 7D2 since
     // EngDrvOut() is a nop there.  Some definition of the enum is required to build.
     // See 200D for a safe filtered EngDrvOut() - which probably should be more

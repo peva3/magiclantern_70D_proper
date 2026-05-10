@@ -412,6 +412,36 @@ info_elem_t info_config_photo[] =
     { .string = { { INFO_TYPE_STRING, { 693, 459, 2, .name = "Copyright", .user_disable = 0, .anchor_flags_self = INFO_ANCHOR_RIGHT }}, INFO_STRING_COPYRIGHT, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM_SHADOW } },
 #endif
 
+#if defined(CONFIG_70D)
+    /* 70D-specific layout: avoids bottom bar area (y=459) to prevent flickering
+     * on vari-angle display. Uses inner screen positions only.
+     * CONFIG_LVAPP_HACK_DEBUGMSG handles Canon bottom bar suppression. */
+
+    /* entry 1, max AUTO ISO */
+    { .string = { { INFO_TYPE_STRING, { MAX_ISO_POS_X, MAX_ISO_POS_Y, 2, .name = "Max ISO Range"  }}, INFO_STRING_ISO_MAX, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM_SHADOW } },
+
+    /* entry 2 and 3, WB strings */
+    { .string = { { INFO_TYPE_STRING, { WBS_GM_POS_X, WBS_GM_POS_Y, 2, .name = "WB GM" }}, INFO_STRING_WBS_GM, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM_SHADOW } },
+    { .string = { { INFO_TYPE_STRING, { WBS_POS_X, WBS_POS_Y, 2, .name = "WB BA" }}, INFO_STRING_WBS_BA, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM_SHADOW } },
+
+    /* entry 4, MLU string */
+    { .string = { { INFO_TYPE_STRING, { MLU_STATUS_POS_X, MLU_STATUS_POS_Y, 2, .name = "MLU" }}, INFO_STRING_MLU, COLOR_FG_NONLV, INFO_COL_FIELD, INFO_FONT_SMALL } },
+
+    /* entry 5, HDR bracketing status */
+    { .string = { { INFO_TYPE_STRING, { HDR_STATUS_POS_X, HDR_STATUS_POS_Y, 2, .name = "HDR" }}, INFO_STRING_HDR, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM_SHADOW } },
+
+    /* Kelvin (bold icon + value) */
+    { .string = { { INFO_TYPE_STRING, { WB_K_ICON_POS_X+10+1, WB_K_ICON_POS_Y, 2, .name = "K ICON1" }}, INFO_STRING_KELVIN_ICO, COLOR_FG_NONLV, INFO_COL_FIELD, INFO_FONT_CANON } },
+    { .string = { { INFO_TYPE_STRING, { WB_K_ICON_POS_X+10-1, WB_K_ICON_POS_Y, 2, .name = "K ICON2" }}, INFO_STRING_KELVIN_ICO, COLOR_FG_NONLV, INFO_COL_FIELD, INFO_FONT_CANON } },
+    { .string = { { INFO_TYPE_STRING, { WB_KELVIN_POS_X,    2+WB_KELVIN_POS_Y, 2, .name = "Kelvin"  }}, INFO_STRING_KELVIN, COLOR_FG_NONLV, INFO_COL_FIELD, INFO_FONT_MEDIUM_SHADOW } },
+
+    /* header - inner screen positions to avoid vari-angle display conflict */
+    { .string = { { INFO_TYPE_STRING, { 28, 2, 2, .name = "Lens", .user_disable = 0 }}, INFO_STRING_LENS, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM } },
+    { .string = { { INFO_TYPE_STRING, { 710, 2, 2, .name = "Date", .user_disable = 0, .anchor_flags_self = INFO_ANCHOR_RIGHT }}, INFO_STRING_CAM_DATE, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM } },
+    /* footer - moved up from y=459 to y=440 to avoid vari-angle display flicker zone */
+    { .string = { { INFO_TYPE_STRING, { DISPLAY_CLOCK_POS_X, DISPLAY_CLOCK_POS_Y, 2, .name = "Time" }}, INFO_STRING_TIME, COLOR_FG_NONLV, INFO_COL_PEEK, INFO_FONT_LARGE } },
+#endif
+
     { .type = INFO_TYPE_END },
 };
 
@@ -2194,56 +2224,6 @@ uint32_t info_print_battery_icon(info_elem_t *config, info_elem_battery_icon_t *
         return 1;
     }
 
-#if 0 // fights with Canon icon; do not draw, but keep it for positioning the other elements
-
-#ifdef CONFIG_BATTERY_INFO
-    int batlev = GetBatteryLevel();
-    int info_field_color = bmp_getpixel(615,455);
-
-    int pos_x = element->hdr.pos.abs_x;
-    int pos_y = element->hdr.pos.abs_y;
-
-    if(run_type == INFO_PRINT)
-    {
-        uint batcol = 0;
-        uint batfil = 0;
-        bmp_fill(info_field_color,pos_x-4,pos_y+14,96,32); // clear the Canon battery icon
-
-        if (batlev <= (int)element->pct_red)
-        {
-            batcol = COLOR_RED;
-        }
-        else
-        {
-            batcol = COLOR_WHITE;
-        }
-
-        bmp_fill(batcol,pos_x+10,pos_y,72,32); // draw the new battery icon
-        bmp_fill(batcol,pos_x,pos_y+8,12,16);
-        bmp_fill(info_field_color,pos_x+14,pos_y+4,64,24);
-
-        if (batlev <= (int)element->pct_red)
-        {
-            batcol = COLOR_RED;
-        }
-        else if (batlev <= (int)element->pct_yellow)
-        {
-            batcol = COLOR_YELLOW;
-        }
-        else
-        {
-            batcol = COLOR_GREEN2;
-        }
-
-        batfil = batlev*56/100;
-        bmp_fill(batcol,pos_x+18+56-batfil,pos_y+8,batfil,16);
-    }
-#else
-    /* feature n/a, paint it red */
-    bmp_fill(COLOR_RED, element->hdr.pos.abs_x, element->hdr.pos.abs_y, element->hdr.pos.w, element->hdr.pos.h);
-#endif
-
-#endif
     return 0;
 }
 

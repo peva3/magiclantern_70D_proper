@@ -997,7 +997,6 @@ audio_o2gain_display( void * priv, int x, int y, int selected )
 }
 #endif
 
-
 static const char* get_audio_input_string()
 {
     switch(input_choice) {

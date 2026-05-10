@@ -67,7 +67,7 @@ NSTUB(0xFF0D97AC,  gui_main_task)
 /** ASIF **/
 NSTUB(0xFF14169C,  PowerAudioOutput)
 NSTUB(0xFF13FDE0,  PowerMicAmp)                             /* present on 650D.104, EOSM.202, 700D.113 */
-// NSTUB(0xFF11970C,  SetAudioVolumeIn)
+NSTUB(0xFF11970C,  SetAudioVolumeIn)
 NSTUB(0xFF13F728,  SetAudioVolumeOut)
 NSTUB(0xFF117DFC,  SetNextASIFADCBuffer)
 NSTUB(0xFF117FE4,  SetNextASIFDACBuffer)
@@ -78,14 +78,14 @@ NSTUB(0xFF117934,  StopASIFDMADAC)
 NSTUB(0xFF11758C,  StopASIFDMAADC)
 NSTUB(0xFF11936C,  SoundDevActiveIn)
 NSTUB(0xFF1195C4,  SoundDevShutDownIn)
-// NSTUB(    ???,  SetASIFMode)                             /* present on 700D.113 */
+// NSTUB(    ???,  SetASIFMode)                             /* present on 700D.113 (0xFF109510) and 6D.116 (0xFF11CD44) */
+                                                             /* 70D address unknown - need to search _audio_ic_read/write callers */
 
 /** Audio **/
 NSTUB(   0x7B1F8,  sounddev)
 NSTUB(0xFF13F208, _audio_ic_read)
 NSTUB(0XFF13ED44, _audio_ic_write)
 NSTUB(0xFFA1844C,  audio_thresholds)
-// NSTUB(0xFF11936C,  sounddev_active_in)                      /* This one now calls another function, maybe canon refactored the common code path */
 NSTUB(0xFF118F5C,  sounddev_task)
 
 /** Bitmap **/
@@ -119,8 +119,54 @@ NSTUB(0xFF55CA40,  LiveViewApp_handler)
 NSTUB(0xFF55F1CC,  LiveViewApp_handler_end)
 NSTUB(0xFF55D838,  LiveViewApp_handler_BL_JudgeBottomInfoDispTimerState)
 NSTUB(0xFF745794,  LiveViewShutterApp_handler)
-NSTUB(0xFF7523B4,  LiveViewWifiApp_handler)
-NSTUB(0xFF6EEB9C,  LiveViewLevelApp_handler)
+NSTUB(0xFF7523B4, LiveViewWifiApp_handler)
+
+/** WiFi/Socket API (70D - DIGIC V) **/
+/* Architecture: Socket functions are RAM-loaded from firmware module space at 0x0005xxxx */
+/* (loaded by DryOS at boot, NOT at fixed ROM addresses). Use WEAK_FUNC + direct         */
+/* function pointers in modules. Only socket_close is in ROM1.                            */
+/* See: modules/wifi_test/wifi_test.c for runtime verification pattern                    */
+/*                                                                                        */
+/* Socket API (RAM-loaded 0x0005xxxx - use direct fn pointers with runtime verify):      */
+/*   socket_create:   0x00059AF8  (24 callers, args: domain=1, type=1, protocol=0)       */
+/*   socket_bind:     0x00059E94  (3 callers)                                            */
+/*   socket_connect:  0x00059DDC  (8 callers)                                            */
+/*   socket_listen:   0x0005A9D0  (9 callers, args: fd, backlog)                         */
+/*   socket_accept:   0x00059CE8  (13 callers - may be recvvar)                          */
+/*   socket_recv:     0x00059CE8  (13 callers)                                           */
+/*   socket_send:     0x0005A09C  (30 callers)                                           */
+/*   socket_setsockopt: 0x0005A810 (47 callers - most widely used)                       */
+/*   socket_close:    0xFF14F74C  (3 callers - CONFIRMED in ROM1!)                       */
+/*   socket():        0x00059D60  (4 callers - raw syscall)                              */
+/*                                                                                        */
+/* WiFi Management (RAM-loaded):                                                         */
+/*   nif_setup/NW commands: 0x0005D708 (6 callers)                                       */
+/*   set_IP_address: see NW command strings at 0xFF46CCD8 in ROM1                        */
+/*   wlan_connect: not found - may use NW dispatch or call() interface                   */
+/*                                                                                        */
+/* NwLimeInit/NwLimeOn: NOT found in 70D ROM1 (different arch than 200D DIGIC 8).        */
+/* Use call() to try eventprocs at runtime.                                              */
+/*                                                                                        */
+/* PTPIP socket wrappers (ROM1, safer than calling 0x0005xxxx directly):                 */
+/* Full PTPIP SU (Socket Utility) module at 0xFF7AEE00-0xFF7AF500                      */
+/* These are ROM1-resident wrappers with error handling, logging, proper param setup.   */
+/*                                                                                       */
+/* Socket API:                                                                          */
+NSTUB(0xFF14F74C, socket_close_caller)
+NSTUB(0xFF7AF380, socket_close_if_valid)       /* close(fd) if fd != -1, else noop           */
+/*                                                                                       */
+/* PTPIP Socket Wrappers (safe, ROM1-resident, include error handling + logging):      */
+NSTUB(0xFF7AF220, ptpip_sock_create)           /* socket_create(1,1,0) + setsockopt REUSEADDR */
+NSTUB(0xFF7AEE18, ptpip_bind_param)            /* socket() + bind + socket_close on error     */
+NSTUB(0xFF7AEE80, ptpip_open_server)           /* Full TCP server: socket+bind+setopt+log     */
+NSTUB(0xFF7AF160, ptpip_sock_accept)           /* accept client connection, returns client fd */
+NSTUB(0xFF7AF2CC, ptpip_create_client)         /* TCP client: connect from sockaddr struct     */
+NSTUB(0xFF7AEFCC, ptpip_listen_close)          /* listen(1) + socket_close_caller             */
+NSTUB(0xFF7AF344, ptpip_close_server)          /* listen(2,shutdown) + socket_close_caller    */
+NSTUB(0xFF7AF38C, ptpip_set_keepalive)         /* setsockopt(SO_KEEPALIVE=1) helper           */
+NSTUB(0xFF7AF3B4, ptpip_errno_handler)         /* Print "[PTPIP] SU: errno=%d" with DryOS errno */
+
+NSTUB(0xFF6EEB9C, LiveViewLevelApp_handler)
 NSTUB(0xFF776250,  PlayMain_handler) // old StopPlayTouchPassFilterApp_handler
 NSTUB(0xFF5886E0,  PlayMovieGuideApp_handler)
 NSTUB(0xFF56A160,  ShootOlcApp_handler)
@@ -184,7 +230,7 @@ NSTUB(    0x8094,  SetHPTimerNextTick)
 
 /** H264 Encoder **/
 NSTUB(   0x946E0,  mvr_config)
-NSTUB(0xFF2BB65C,  mvrFixQScale)                            // FIXME: use call()
+NSTUB(0xFF2BB65C,  mvrFixQScale)                            // verified ROM address; also works via call("mvrFixQScale")
 NSTUB(0xFF2BB154,  mvrSetDefQScale)
 NSTUB(0xFF2BB18C,  mvrSetFullHDOptSize)
 NSTUB(0xFF2BB370,  mvrSetGopOptSizeFULLHD)

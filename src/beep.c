@@ -1130,10 +1130,6 @@ static void beep_init()
     find_next_wav(0,1);
 #endif
 
-//~ #ifdef CONFIG_600D
-    //~ Load_ASIFDMAADC();
-//~ #endif
-
     (void)audio_recording_start_time;
 }
 

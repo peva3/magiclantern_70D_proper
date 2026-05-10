@@ -23,6 +23,7 @@
 #include "lvinfo.h"
 #include "raw.h"
 #include "rom_values.h"
+#include "propvalues.h"
 
 #ifdef CONFIG_DEBUG_INTERCEPT
 #include "dm-spy.h"
@@ -294,13 +295,168 @@ static void run_test()
     // since dm_store is more permissive than dm_print.
     call("dumpf");
 
-#if 0 && defined(CONFIG_200D)
-    // Want to run a quick test?  You can hack it in here,
-    // after modifying the above guards.  The guards allow
-    // you to hack in whatever hard-coded per cam constants
-    // you want, if you're doing that kind of thing.
-#endif
+}
 
+static void hw_test_task(void* priv, int unused)
+{
+    extern int GetBatteryLevel(void);
+    int test_count = 0, pass_count = 0;
+
+    FILE* f = FIO_CreateFile("ML/LOGS/HW_TEST.LOG");
+    if (!f)
+    {
+        bmp_printf(FONT_LARGE, 0, 60, "Cannot create HW_TEST.LOG!");
+        msleep(2000);
+        return;
+    }
+
+#define LOG(...) do { \
+    char _b[128]; \
+    int _n = snprintf(_b, sizeof(_b), __VA_ARGS__); \
+    printf("%s", _b); \
+    if (_n > 0) FIO_WriteFile(f, _b, _n); \
+} while(0)
+
+    LOG("=== HW_TEST LOG ===\n\n");
+
+#define TEST_HEADER(id, name) do { \
+    test_count = id; \
+    bmp_printf(FONT_MED, 0, 30 + id * 14, "T%d: %s...", id, name); \
+    LOG("[TEST %d] %s: ", id, name); \
+    msleep(200); \
+} while(0)
+
+#define TEST_RESULT(ok) do { \
+    if (ok) { pass_count++; } \
+    int _y = 30 + test_count * 14; \
+    bmp_printf(FONT_MED, 0, _y, "T%d: %s", test_count, ok ? "OK" : "FAIL"); \
+    LOG("%s\n", ok ? "OK" : "FAIL"); \
+    msleep(200); \
+} while(0)
+
+    TEST_HEADER(1, "model_id");
+    int ok1 = (camera_model_id == 0x80000325);
+    TEST_RESULT(ok1);
+
+    TEST_HEADER(2, "fio_malloc");
+    void* p2 = fio_malloc(4096);
+    int ok2 = (p2 != 0);
+    if (ok2) fio_free(p2);
+    TEST_RESULT(ok2);
+
+    TEST_HEADER(3, "fio_malloc big");
+    void* p3 = fio_malloc(65536);
+    int ok3 = (p3 != 0);
+    if (ok3) fio_free(p3);
+    TEST_RESULT(ok3);
+
+    TEST_HEADER(4, "firmware version");
+    int ok4 = (strlen(firmware_version) > 0);
+    TEST_RESULT(ok4);
+
+    TEST_HEADER(5, "shamem FPS TA");
+    uint32_t ta5 = shamem_read(0xC0F06008);
+    int ok5 = (ta5 != 0 && ta5 != 0xFFFFFFFF);
+    TEST_RESULT(ok5);
+
+    TEST_HEADER(6, "shamem ENGIO");
+    uint32_t eng6 = shamem_read(0xC0F06800);
+    int ok6 = (eng6 != 0xFFFFFFFF);
+    TEST_RESULT(ok6);
+
+    /* flush log to disk: close and reopen forces FAT driver to commit */
+    FIO_CloseFile(f);
+    msleep(50);
+    f = FIO_CreateFileOrAppend("ML/LOGS/HW_TEST.LOG");
+    if (!f)
+    {
+        bmp_printf(FONT_LARGE, 0, 60, "Log flush failed!");
+        return;
+    }
+
+    TEST_HEADER(7, "get_ms_clock");
+    int ok7 = (get_ms_clock() > 0);
+    TEST_RESULT(ok7);
+
+    TEST_HEADER(8, "msleep(100) timing");
+    int t0 = get_ms_clock();
+    msleep(100);
+    int t1 = get_ms_clock();
+    int elapsed = t1 - t0;
+    int ok8 = (elapsed >= 50 && elapsed <= 500);
+    TEST_RESULT(ok8);
+    if (ok8) LOG("[DETAIL] msleep(100) took %dms\n", elapsed);
+
+    TEST_HEADER(9, "bmp_vram ptr");
+    uint8_t* vram = bmp_vram();
+    int ok9 = (vram != 0);
+    TEST_RESULT(ok9);
+
+    TEST_HEADER(10, "semaphore");
+    struct semaphore* sem = create_named_semaphore("hw_test", SEM_CREATE_UNLOCKED);
+    int sem_ok = (sem != 0);
+    if (sem_ok) {
+        int took = take_semaphore(sem, 0);  /* 0 = wait forever */
+        sem_ok = (took == 0);
+        if (sem_ok) give_semaphore(sem);
+    }
+    int ok10 = sem_ok;
+    TEST_RESULT(ok10);
+
+    TEST_HEADER(11, "CMOS temp raw");
+    int ok11 = (efic_temp != 0);
+    if (ok11) {
+        int celsius = efic_temp * 50 / 100 - 57;
+        LOG("[DETAIL] efic_temp=%d raw, ~%d C\n", efic_temp, celsius);
+    }
+    TEST_RESULT(ok11);
+
+    TEST_HEADER(12, "shutter count");
+    int ok12 = (shutter_count >= 0);
+    if (ok12) LOG("[DETAIL] shutter_count=%d\n", shutter_count);
+    TEST_RESULT(ok12);
+
+    TEST_HEADER(13, "battery level");
+    int ok13 = 0;
+    int batt = -1;
+    #ifdef CONFIG_BATTERY_INFO
+    batt = GetBatteryLevel();
+    ok13 = (batt >= 0 && batt <= 100);
+    #endif
+    if (ok13) LOG("[DETAIL] battery=%d%%\n", batt);
+    TEST_RESULT(ok13);
+
+    TEST_HEADER(14, "SD write 256KB");
+    void* buf14 = fio_malloc(262144);
+    int ok14 = (buf14 != 0);
+    int speed = 0;
+    if (buf14) {
+        FILE* sf = FIO_CreateFile("ML/LOGS/SPEED.BIN");
+        if (sf) {
+            int t0 = get_ms_clock();
+            int n = FIO_WriteFile(sf, buf14, 262144);
+            int t1 = get_ms_clock();
+            FIO_CloseFile(sf);
+            int elapsed = t1 - t0;
+            if (elapsed > 0) speed = (256 * 1000) / elapsed;
+            LOG("[DETAIL] 256KB write: %dms, %d bytes, ~%d KB/s\n", elapsed, n, speed);
+        }
+        fio_free(buf14);
+    }
+    ok14 = (ok14 && speed > 0);
+    TEST_RESULT(ok14);
+
+    /* summary */
+    bmp_printf(FONT_LARGE, 0, 30, "HW_TEST: %d/%d PASS", pass_count, test_count);
+    LOG("\n=== SUMMARY: %d/%d passed ===\n", pass_count, test_count);
+    LOG("File: ML/LOGS/HW_TEST.LOG\n");
+#undef TEST_HEADER
+#undef TEST_RESULT
+#undef LOG
+
+    FIO_CloseFile(f);
+    NotifyBox(3000, "HW_TEST.LOG written to card");
+    msleep(3000);
 }
 
 #ifdef FEATURE_BOOTFLAG_MENU
@@ -704,26 +860,6 @@ static MENU_UPDATE_FUNC(efictemp_display)
 #endif
 #endif
 
-#if 0 // CONFIG_5D2
-static void ambient_display(
-    void *            priv,
-    int            x,
-    int            y,
-    int            selected
-)
-{
-    extern int lightsensor_raw_value;
-    int ev = gain_to_ev_scaled(lightsensor_raw_value, 10);
-    bmp_printf(
-        selected ? MENU_FONT_SEL : MENU_FONT,
-        x, y,
-        "Ambient light: %d.%d EV",
-        ev/10, ev%10
-    );
-    menu_draw_icon(x, y, MNI_ON, 0);
-}
-#endif
-
 #ifdef FEATURE_DEBUG_PROP_DISPLAY
 static CONFIG_INT("prop.i", prop_i, 0);
 static CONFIG_INT("prop.j", prop_j, 0);
@@ -898,13 +1034,6 @@ static struct menu_entry debug_menus[] = {
         .help = "Take a screenshot for each ML menu.",
     }, */
 #if CONFIG_DEBUGMSG
-    #if 0
-    {
-        .name = "Draw palette",
-        .select        = bmp_draw_palette,
-        .help = "Display a test pattern to see the color palette."
-    },
-    #endif
     {
         .name = "Spy properties",
         .priv = &draw_prop,
@@ -934,6 +1063,12 @@ static struct menu_entry debug_menus[] = {
         .priv        = dump_img_task,
         .select      = run_in_separate_task,
         .help = "Dump all image buffers (LV, HD, RAW) from current video mode."
+    },
+    {
+        .name   = "Generate HW_TEST.LOG",
+        .priv   = hw_test_task,
+        .select = run_in_separate_task,
+        .help   = "Run diagnostics and write ML/LOGS/HW_TEST.LOG"
     },
 #ifdef FEATURE_UNMOUNT_SD_CARD
     {
@@ -1095,14 +1230,6 @@ static struct menu_entry debug_menus[] = {
         //.essential = FOR_MOVIE | FOR_PHOTO,
     },
 #endif
-    #if 0 // CONFIG_5D2
-    {
-        .name = "Ambient light",
-        //~.display = ambient_display,
-        .help = "Ambient light from the sensor under LCD, in raw units.",
-        //.essential = FOR_MOVIE | FOR_PHOTO,
-    },
-    #endif
 #ifdef CONFIG_BATTERY_INFO
     {
         .name = "Battery level",

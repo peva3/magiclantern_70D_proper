@@ -1558,10 +1558,8 @@ void gdb_cmd_query(char *args, char *reply)
         sprintf(reply, "QC%X", gdb_attached_pid);
     }
     else
-#endif   
-    {
-        gdb_strncpy(reply, "", 0);
-    }
+#endif
+    gdb_strncpy(reply, "", 0);
 }
 
 void gdb_main_task(void)

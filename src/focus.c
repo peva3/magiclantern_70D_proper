@@ -906,8 +906,10 @@ int is_continuous_af()
     return is_movie_mode() ? continuous_af_movie : continuous_af_photo;
 }
 
+#ifdef CONFIG_LV_FOCUS_INFO
 #if defined(FEATURE_TRAP_FOCUS) || defined(FEATURE_MAGIC_ZOOM)
 static int trap_focus_autoscaling = 1;
+#endif
 #endif
 
 #ifdef FEATURE_TRAP_FOCUS
@@ -923,11 +925,10 @@ int handle_trap_focus(struct event * event)
 #endif
 
 
-// 70D unfortunately has no LV_FOCUS_DATA property. This explains why
-// focus confirmation bars in magic Zoom wouldn't work. See also:
-// http://www.magiclantern.fm/forum/index.php?topic=14309.msg147257#msg147257
-// we also need to disable the focus misc task to cleanup debugmsg logs
-#if !defined(CONFIG_70D)
+// 70D does not have LV_FOCUS_DATA property, but has PROP_LV_LENS with focus_pos.
+// We use focus_pos stability detection as a proxy for focus confirmation.
+// See: http://www.magiclantern.fm/forum/index.php?topic=14309.msg147257#msg147257
+#ifdef CONFIG_LV_FOCUS_INFO
 static int focus_graph_dirty = 0;
 #if defined(FEATURE_TRAP_FOCUS) || defined(FEATURE_MAGIC_ZOOM)
 
@@ -1016,6 +1017,64 @@ PROP_HANDLER(PROP_LV_FOCUS_DATA)
 void plot_focus_mag(){};
 #endif
 
+#ifdef CONFIG_70D
+// 70D-specific focus tracking using PROP_LV_LENS focus_pos
+// Since we lack LV_FOCUS_DATA, we detect focus by monitoring position stability
+// When focus_pos stops changing for several samples, we consider focus "locked"
+static int focus_pos_history[8] = {0};
+static int focus_pos_idx = 0;
+static int last_focus_pos = 0;
+
+static void update_focus_pos_70d(void)
+{
+    int current_pos = lens_info.focus_pos;
+
+    /* Track position samples in a circular buffer */
+    focus_pos_history[focus_pos_idx % 8] = current_pos;
+    focus_pos_idx++;
+
+    /* Use a small sliding window to detect stability (noise-tolerant)
+       If max-min in the last WINDOW samples is <= STABLE_THRESHOLD, treat as stable. */
+    const int WINDOW = 4;
+    const int STABLE_THRESHOLD = 2; /* lens encoder steps considered noise */
+
+    if (focus_pos_idx < WINDOW) return; /* not enough samples yet */
+
+    int minv = focus_pos_history[(focus_pos_idx - 1) % 8];
+    int maxv = minv;
+    int sum = 0;
+    for (int i = 0; i < WINDOW; i++)
+    {
+        int v = focus_pos_history[(focus_pos_idx - 1 - i) % 8];
+        if (v < minv) minv = v;
+        if (v > maxv) maxv = v;
+        sum += v;
+    }
+
+    int stable = (maxv - minv) <= STABLE_THRESHOLD;
+    int avg = sum / WINDOW;
+
+    if (stable)
+    {
+        /* Only trigger when the stable position differs meaningfully from last reported */
+        int pos_delta = ABS(avg - last_focus_pos);
+        if (pos_delta > 0)
+        {
+            /* Scale delta to a focus_mag (tunable) */
+            int focus_mag = COERCE(pos_delta * 4, 0, 200);
+            if (focus_mag >= 10) /* threshold to avoid tiny blips */
+                update_focus_mag(focus_mag);
+
+            last_focus_pos = avg;
+        }
+    }
+    else
+    {
+        /* still moving; don't update last_focus_pos */
+    }
+}
+#endif
+
 static void
 focus_misc_task(void* unused)
 {
@@ -1031,6 +1090,14 @@ focus_misc_task(void* unused)
             focus_graph_dirty = 0;
         }
         
+#ifdef CONFIG_70D
+        // 70D: Poll focus_pos and detect focus lock via position stability
+        if (lv && lens_info.lens_exists)
+        {
+            update_focus_pos_70d();
+        }
+#endif
+
 #ifdef CONFIG_60D
         if (CURRENT_GUI_MODE_2 == DLG2_FOCUS_MODE && is_manual_focus())
 #else
@@ -1051,7 +1118,7 @@ focus_misc_task(void* unused)
 }
 
 TASK_CREATE( "focus_misc_task", focus_misc_task, 0, 0x1e, 0x1000 );
-#endif // !defined(CONFIG_70D)
+#endif
 
 #ifdef FEATURE_TRAP_FOCUS
 static MENU_UPDATE_FUNC(trap_focus_display)
@@ -1211,22 +1278,6 @@ static struct menu_entry focus_menu[] = {
                 .help = "Sets up stack focus to use the same range as rack focus.",
             },
 
-            #if 0
-            {
-                .name = "Trigger mode",
-                .priv = &focus_stack_enabled, 
-                .max = 1,
-                .choices = (const char *[]) {"Press PLAY", "Take a pic"},
-                .help = "Choose how to start the focus stacking sequence.",
-            },
-            {
-                .name = "Bracket focus",
-                .priv = &focus_bracket_dir, 
-                .max = 2,
-                .choices = (const char *[]) {"normal", "reverse","disable"},
-                .help = "Start in front or behind focus (varies among lenses)",
-            },
-            #endif
             MENU_EOL
         },
     },

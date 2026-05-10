@@ -783,8 +783,20 @@ lens_focus(
     
     for (int i = 0; i < num_steps; i++)
     {
-        if (lv && !mirror_down && lens_info.job_state == 0)
+        if (lv && !mirror_down)
         {
+            /* Wait for lens to be ready (70D needs this - job_state may lag) */
+            int job_timeout = 100;
+            while (lens_info.job_state != 0 && job_timeout > 0)
+            {
+                if (!lv) break;
+                if (is_manual_focus()) break;
+                msleep(20);
+                job_timeout--;
+            }
+
+            if (lens_info.job_state == 0)
+            {
             if (wait)
             {
                 lv_focus_done = 0;
@@ -849,6 +861,7 @@ lens_focus(
                 /* open-loop delay, without waiting for confirmation; at least 10ms */
                 msleep(MAX(10, extra_delay));
             }
+        }
         }
     }
 
@@ -1931,9 +1944,6 @@ void _prop_lv_lens_request_update()
 #if defined(CONFIG_DIGIC_VI) || defined(CONFIG_DIGIC_VII)
     // this will make PROP_LV_LENS update itself outside LV mode on D67 models.
     // But it will spam uart with EvtMainSubRequestLensData
-// SJE FIXME this is far too annoying to enable during dev,
-// but may be wanted later (can we make it quieter?)
-//    call("msub.lensdata");
 #elif defined(CONFIG_DIGIC_45)
     /* this property is normally active only in LiveView
      * however, the MPU can be tricked into sending its value outside LiveView as well

@@ -188,7 +188,12 @@ static int get_mic_power(int input_source)
 static void audio_monitoring_update()
 {
     // kill video connect/disconnect event... or not
-    *(int*)HOTPLUG_VIDEO_OUT_STATUS_ADDR = audio_monitoring ? 2 : 0;
+    // HOTPLUG_VIDEO_OUT_STATUS_ADDR may be 0 (not defined) on some cameras.
+    // On DIGIC 4/5, address 0 is mapped, so guard with camera-specific check.
+    #ifdef CONFIG_70D
+    if (HOTPLUG_VIDEO_OUT_STATUS_ADDR)
+    #endif
+        *(int*)HOTPLUG_VIDEO_OUT_STATUS_ADDR = audio_monitoring ? 2 : 0;
         
     if (audio_monitoring && rca_monitor)
     {
@@ -615,7 +620,7 @@ my_sounddev_task()
     // Fake the sound dev task parameters
     sounddev.sem_alc = create_named_semaphore(NULL, SEM_CREATE_LOCKED);
     
-    sounddev_active_in(0,0);
+    SoundDevActiveIn(0);
     
     audio_configure( 1 ); // force it this time
     

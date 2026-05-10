@@ -319,7 +319,6 @@ static uint32_t indexed2rgbLUT[RGB_LUT_SIZE] = {
 };
 
 
-
 #if 0
 static uint32_t indexed2uyvyLUT[COLOR_ORANGE + 1] = {
     0x00800080, // COLOR_EMPTY (black, but we will apply alpha later)

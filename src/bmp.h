@@ -377,7 +377,6 @@ void bmp_draw_rect_chamfer(int color, int x0, int y0, int w, int h, int a, int t
 #define COLOR_DARK_CYAN1_MOD 24
 #define COLOR_DARK_CYAN2_MOD 25
 //#define COLOR_DARK_YELLOW_MOD 26
-
 /*
  * to be used instead of background color, to draw only the foreground pixels
  * implemented for bfnt_draw_char (FONT_CANON and ICON_ML_*) and non-shadow
