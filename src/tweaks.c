@@ -218,18 +218,8 @@ static MENU_UPDATE_FUNC(expsim_display)
 #endif
 
 #else // no _expsim, use some dummy stubs
-void set_expsim(int expsim){};
+void set_expsim(int expsim){ (void)expsim; }
 #endif
-
-/*
-void set_pic_quality(int q)
-{
-    if (q == -1) return;
-    prop_request_change(PROP_PIC_QUALITY, &q, 4);
-    prop_request_change(PROP_PIC_QUALITY2, &q, 4);
-    prop_request_change(PROP_PIC_QUALITY3, &q, 4);
-}
-*/
 
 extern unsigned lcd_sensor_shortcuts;
 
@@ -247,7 +237,11 @@ static void show_display_gain_level()
 static void adjust_backlight_level(int delta)
 {
     if (backlight_level < 1 || backlight_level > 7) return; // kore wa dame desu yo
-    if (!DISPLAY_IS_ON) call("TurnOnDisplay");
+    if (!DISPLAY_IS_ON) {
+#ifndef CONFIG_70D
+        call("TurnOnDisplay");
+#endif
+    }
     
     int digic_iso_gain_photo = get_digic_iso_gain_photo();
     int G = gain_to_ev_scaled(digic_iso_gain_photo, 1) - 10;
@@ -1806,7 +1800,9 @@ void zoom_trick_step()
 
         // action!
         if (zoom_trick == 1) fake_simple_button(BGMT_PRESS_ZOOM_IN);
+#ifdef FEATURE_ARROW_SHORTCUTS
         if (zoom_trick == 2) arrow_key_mode_toggle();
+#endif
 
 
         timestamp_for_unknown_button = 0;
@@ -2790,6 +2786,8 @@ static void grayscale_menus_step()
                 else if (bmp_color_scheme == 3) alter_bitmap_palette(3,1,0,0);
                 else if (bmp_color_scheme == 4) alter_bitmap_palette(5,0,-170/2,500/2); // strong shift towards red
                 else if (bmp_color_scheme == 5) alter_bitmap_palette(3,0,-170/2,-500/2); // strong shift toward green (pink 5,0,170/2,500/2)
+                else if (bmp_color_scheme == 6) alter_bitmap_palette(3,0,500/2,-170/2); // blue shift (color blind assist)
+                else if (bmp_color_scheme == 7) alter_bitmap_palette(3,0,0,0); // high contrast (dimmed, no color shift)
             }
             msleep(50);
         }
@@ -3639,9 +3637,11 @@ static struct menu_entry display_menus[] = {
             {
                 .name = "Color scheme",
                 .priv     = &bmp_color_scheme,
-                .max = 5,
-                .choices = (const char *[]) {"Default", "Dark", "Bright Gray", "Dark Gray", "Dark Red", "Dark Green"},
+                .max = 7,
+                .choices = (const char *[]) {"Default", "Dark", "Bright Gray", "Dark Gray", "Dark Red", "Dark Green", "Blue Shift", "High Contrast"},
                 .help = "Color scheme for bitmap overlays (ML menus, Canon menus...)",
+                .help2 = "Blue Shift: shifts colors toward blue (color blind assist for red-blind).\n"
+                         "High Contrast: dimmed but no color shift, for strong backlight.",
                 .icon_type = IT_DICE_OFF,
             },
             #endif
