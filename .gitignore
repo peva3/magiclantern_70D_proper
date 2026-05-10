@@ -1,3 +1,4 @@
+syntax: glob
 *.gpr
 *.gar
 *.qcow2
@@ -32,7 +33,6 @@ tags
 *.i
 *.log
 *.pyc
-__pycache__/
 build_tools/xor_chk
 docs/html
 docs/latex
@@ -77,43 +77,4 @@ modules/*/*/build
 developer_guide/developer_guide.html
 developer_guide/developer_guide.pdf
 
-# qemu-eos build artifacts
-qemu-eos/build/
-qemu-eos/*.o
-qemu-eos/*.d
-qemu-eos/config-all-devices.mak
-qemu-eos/config-all-disks.mak
-qemu-eos/config-host.mak
-qemu-eos/config-status.mak
-qemu-eos/config-targets.mak
-qemu-eos/Makefile.ninja
-qemu-eos/build.ninja
-qemu-eos/stubs/
-qemu-eos/trace/trace-generated.c
-qemu-eos/trace/trace-generated.h
-qemu-eos/trace/trace-generated-timestamp.c
-core.*
-qemu-eos/magiclantern/core.*
-qemu-eos/magiclantern/disk_images/*.qcow2
-qemu-eos/ui/keycodemapdb/
-qemu-eos/dtc/
-qemu-eos/capstone/
-qemu-eos/slirp/
-
-# ROM dumps - only track essential ones (no RAM dumps, no placeholders)
-roms/*/RAM*.BIN
-roms/*/placeholder*
-roms/**/ROM*.BIN.gz
-
-70d-latest/
-70d-dev/
-
-# Build logs
-logs/
-
-# Release archives
-magiclantern_70D-*.tar.gz
-
-70D.gpr
-70D.rep/
-70D_IMPORT.txt
+syntax: regexp
