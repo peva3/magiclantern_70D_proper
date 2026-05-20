@@ -64,7 +64,6 @@ import struct
 import argparse
 from argparse import RawDescriptionHelpFormatter
 from dataclasses import dataclass
-from numpy import uint8, uint32
 
 @dataclass
 class FAT16:
@@ -125,12 +124,12 @@ def setExfat(device, base, args):
     EXFAT_VBR_SIZE = 512 * 11
 
     print('Calculating VBR checksum')
-    checksum = uint32(0)
+    checksum = 0
     for index in range(0, EXFAT_VBR_SIZE):
         if index in {106, 107, 112}:
             continue
-        value = uint8(device[base+index])
-        checksum = uint32((checksum << 31) | (checksum >> 1) + value)
+        value = device[base+index] & 0xFF
+        checksum = ((checksum << 31) | (checksum >> 1) + value) & 0xFFFFFFFF
 
     checksum_chunk = struct.pack('<I', checksum) * 128
     device[base+512*11:base+512*12] = checksum_chunk
