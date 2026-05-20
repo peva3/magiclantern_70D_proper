@@ -2644,13 +2644,136 @@ The EOS M (original/M1) is Canon's first mirrorless camera (2012). Shares the 18
 | Fix QEMU ROM loading (QEMU_EOS_WORKDIR) | ✅ DONE |
 | Create doc/EOS-M1.md | ✅ DONE |
 | Create doc/M1-TODO.md | ✅ DONE |
-| Update AGENTS.md with EOSM section | ✅ DONE (this) |
+| Update AGENTS.md with EOSM section | ✅ DONE |
 | Port hw_test module | ✅ DONE |
 | Port ptptun module | ✅ DONE |
-| Add 96kHz to mlv_snd | ✅ DONE (already in code) |
+| Add 96kHz to mlv_snd | ✅ DONE |
 | Write hardware test plan | ✅ DONE (doc/eosm_test_plan.md) |
 | Set up EOSM GDB scripts | ✅ DONE (boot.gdb) |
 | Enable CONFIG_LV_FOCUS_INFO | ✅ DONE (PROP_LV_FOCUS_DATA native) |
 | Enable shutter fine tuning, rack focus, focus stacking | ✅ DONE |
 | Add hw_test.mo to modules.included | ✅ DONE (22 modules) |
 | Fix focus.c build bug (trap_focus_autoscaling) | ✅ DONE |
+
+---
+
+## Canon EOS 90D (DIGIC 8) — Port Status
+
+**Firmware:** 1.1.1 | **DIGIC:** VIII | **Status:** In Progress (started 2026-05-20)
+
+### Overview
+The Canon EOS 90D (2020) is a 32.5MP APS-C DSLR with DIGIC 8 processor. It shares its sensor with the EOS M6 Mark II (both 32.5MP, both DIGIC 8). The M6II port (`platform/M6II.111/`) is already in the codebase and can serve as the primary reference.
+
+### Hardware Specs
+| Spec | Value |
+|------|-------|
+| **Sensor** | 32.5 MP APS-C CMOS (6960 × 4640) |
+| **Processor** | DIGIC 8 (Cortex-A9 dual-core) |
+| **RAM** | 2GB DDR3 (assumed, via `CONFIG_MEM_2GB`) |
+| **ROM** | 0xE0000000 (code, 16MB), 0xF0000000 (assets, 16MB) |
+| **ISA** | ARMv7-a Thumb-2 (DIGIC 8 is ARM mode + Thumb) |
+| **Boot** | Classic `boot-d678.o` or AllocateMemory pool |
+| **MMU** | `CONFIG_MMU_REMAP` (full MMU, no cache hacks) |
+| **VRAM** | RGBA compositor (`FEATURE_VRAM_RGBA`, XCM) |
+| **BFNT** | `CONFIG_NO_BFNT` (load fonts from SD card) |
+| **Display** | 3.0" 1,040K-dot vari-angle |
+| **Touchscreen** | Yes |
+| **WiFi** | Built-in 802.11b/g/n |
+| **Bluetooth** | Built-in |
+| **Storage** | SD/SDHC/SDXC (UHS-II) |
+| **Video** | 4K30 (no crop), 1080p120 |
+| **AF** | Dual Pixel CMOS AF |
+| **Battery** | LP-E6N (same as 70D) |
+
+### Platform Architecture (DIGIC 8 vs DIGIC 5)
+| Aspect | 70D (DIGIC V) | 90D (DIGIC VIII) |
+|--------|---------------|-------------------|
+| CPU Core | ARM946 (single) | Cortex-A9 (dual SMP) |
+| ISA | ARMv5te (ARM mode) | ARMv7-a (Thumb-2) |
+| Boot loader | `boot-d45-am.o` | `boot-d678.o` |
+| ROM map | ROM0=F0000000, ROM1=F8000000 | ROM0=E0000000, ROM1=F0000000 |
+| Firmware entry | 0xFF0C0000 | 0xE0040000 |
+| RAM | 512MB | 2GB (`CONFIG_MEM_2GB`) |
+| MMU | Cache line locking | Full MMU remap |
+| Task struct | V1 | V2 SMP |
+| VRAM | Indexed palette | RGBA compositor (XCM) |
+| Stubs count | 168 | ~120 |
+| Eventproc | 0xFF14xxxx ARM | 0xE05xxxxx Thumb |
+
+### File Inventory for Port
+
+**New files to create (17):**
+```
+platform/90D.100/Makefile                          (30 lines)
+platform/90D.100/stubs.S                           (320 lines)
+platform/90D.100/consts.h                          (200 lines)
+platform/90D.100/internals.h                       (35 lines)  → copy from M6II
+platform/90D.100/features.h                        (50 lines)  → copy from M6II
+platform/90D.100/gui.h                             (90 lines)
+platform/90D.100/cfn.c                             (25 lines)
+platform/90D.100/function_overrides.c              (130 lines)
+platform/90D.100/fps-engio_per_cam.h               (12 lines)
+platform/90D.100/fps-engio_per_cam.c               (20 lines)
+platform/90D.100/property_whitelist.h              (50 lines)
+platform/90D.100/modules.included                  (5 lines)
+platform/90D.100/modules.hidden                    (20 lines)
+platform/90D.100/include/platform/lens.h           (170 lines) → copy from M6II
+platform/90D.100/include/platform/mvr.h            (30 lines)
+platform/90D.100/include/platform/state-object.h   (6 lines)
+platform/90D.100/include/platform/mmu_patches.h    (35 lines)
+```
+
+**Existing files to modify (2):**
+```c
+src/propvalues.h    → add MODEL_EOS_90D    (model ID: TBD from firmware)
+src/property.h      → add SIG_90D_111      (signature: TBD from firmware)
+```
+
+**QEMU files (2):**
+```c
+qemu-eos/hw/eos/model_list.c    → 90D model params (25 lines)
+qemu-eos/hw/eos/mpu_spells/90D.h    → MPU spells (copy from 850D)
+```
+
+### Phase Tracking
+
+| Phase | Hours | Status |
+|-------|-------|--------|
+| P1: ROM Analysis & Ghidra RE | 80-160 | 🔲 Not started |
+| P2: Platform Config Files | 40-80 | 🔲 Not started |
+| P3: ML Source Changes | 20-40 | 🔲 Not started |
+| P4: QEMU Emulation | 60-120 | 🔲 Not started |
+| P5: Hardware Testing | 80-240 | 🔲 Not started |
+| **Total** | **280-640** | |
+
+### Detailed Task Tracking
+
+| Task | Status | Notes |
+|------|--------|-------|
+| FIR file acquired | ✅ DONE | `firmware/EOS_90D/eos90d-v111-win.zip` (40MB) |
+| Create platform dir | ✅ DONE | 17 files created in `platform/90D.100/` |
+| Extract ROM from FIR | 🔲 | QuArk encrypted — need HW dump or decryption tool |
+| Add MODEL_EOS_90D | ✅ DONE | Added to `src/propvalues.h` |
+| Add SIG_90D_111 | ✅ DONE | Added to `src/fw-signature.h` (TBD value) |
+| Create stubs.S | ✅ DONE | Placeholder with firmware_entry only |
+| Create consts.h | ✅ DONE | Placeholder with 850D-derived values |
+| Copy internals/features from M6II | ✅ DONE | Adapted for 90D |
+| Create Makefile | ✅ DONE | Standard D8 Makefile |
+| Create gui.h | ✅ DONE | Copied from 850D (likely similar) |
+| Create cfn.c | ✅ DONE | Placeholder |
+| Create function_overrides.c | ✅ DONE | Placeholder stubs from 850D |
+| Build icon files | 🔲 | |
+| At least compile | 🔲 | |
+| QEMU model entry | 🔲 | |
+| ROM dump from physical camera | 🔲 | Needed for Ghidra + stubs |
+| Find 30 core stubs in Ghidra | 🔲 | Requires ROM dumps |
+| Physical hardware test | 🔲 | |
+
+### Reference Ports
+- **M6II** (`platform/M6II.111/`): Same 32.5MP sensor as 90D. Best reference for sensor calibration, crop_rec, raw, lens structs.
+- **850D** (`platform/850D.100/`): Most complete DIGIC 8 port. Best reference for stubs, boot, general D8 patterns.
+- **M50** (`platform/M50.110/`): Well-documented by kitor. Good reference for D8 quirks.
+
+### Build Size Tracking (90D)
+| Date | autoexec.bin | magiclantern.bin | Changes |
+|------|-------------|------------------|---------|

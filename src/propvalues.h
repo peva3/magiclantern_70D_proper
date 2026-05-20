@@ -29,6 +29,7 @@ extern char camera_serial[32];
 #define MODEL_EOS_650D   0x80000301
 #define MODEL_EOS_6D     0x80000302
 #define MODEL_EOS_70D    0x80000325
+#define MODEL_EOS_90D    0x8000043D // TBD: verify from firmware ROM
 #define MODEL_EOS_700D   0x80000326
 #define MODEL_EOS_M      0x80000331
 #define MODEL_EOS_100D   0x80000346

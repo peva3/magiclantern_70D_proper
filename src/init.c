@@ -34,12 +34,17 @@
 #include "property.h"
 #include "consts.h"
 #include "tskmon.h"
+
 #include "boot-hack.h"
 #include "ml-cbr.h"
 #include "backtrace.h"
+
+extern int uart_printf(const char * fmt, ...);
+
+extern void platform_post_init();
+
+#if defined(FEATURE_GPS_TWEAKS)
 #include "gps.h"
-#ifdef CONFIG_QEMU
-#include "module.h"
 #endif
 
 #if defined(CONFIG_HELLO_WORLD)
@@ -477,27 +482,19 @@ static void my_big_init_task()
     uart_printf("hello from ML, after early tasks");
 #endif
 
-/* Initialize config dir early for module loading (needed before config_load) */
-config_init_early();
-
-#ifdef CONFIG_QEMU
-    /* QEMU: Load modules synchronously for reliable testing */
-    module_load_all_for_qemu();
-#endif
-
-/**
- * kitor FIXME: disabling rom dump for D678 as it uses different addresses
- * and offsets. I feel those should be per generation, or maybe per camera
- * as R has different rom size than RP in same gen...
- */
-#if defined(CONFIG_AUTOBACKUP_ROM) && !defined(CONFIG_QEMU)
+    /**
+     * kitor FIXME: disabling rom dump for D678 as it uses different addresses
+     * and offsets. I feel those should be per generation, or maybe per camera
+     * as R has different rom size than RP in same gen...
+     */
+    #if defined(CONFIG_AUTOBACKUP_ROM) && !defined(CONFIG_QEMU)
     /* backup ROM first time to be prepared if anything goes wrong. choose low prio */
     /* On 5D3, this needs to run after init functions (after card tests) */
     task_create("ml_backup", 0x1f, 0x4000, backup_rom_task, 0 );
-#endif
+    #endif
 
-/* Read ML config. if feature disabled, nothing happens */
-config_load();
+    /* Read ML config. if feature disabled, nothing happens */
+    config_load();
     
     debug_init_stuff();
 
@@ -530,47 +527,12 @@ config_load();
         ml_tasks++;
     }
     
-msleep(500);
+    msleep(500);
 #ifdef CONFIG_XF605
     uart_printf("hello from ML, after late tasks");
 #endif
-ml_started = 1;
 
-/* Write boot success marker file for automated testing */
-{
-    FILE *f = FIO_CreateFile("ML/SETTINGS/BOOT_OK.txt");
-    if (f) {
-        const char *msg = "ML boot successful\n";
-        int w = FIO_WriteFile(f, msg, strlen(msg));
-        FIO_CloseFile(f);
-        printf("[BOOT] Created BOOT_OK.txt: %d bytes written\n", w);
-    } else {
-        printf("[BOOT] Failed to create BOOT_OK.txt\n");
-    }
-}
-
-#ifdef CONFIG_QEMU
-/* QEMU: write hw_test log synchronously (module task never runs in QEMU) */
-{
-    FILE *lf = FIO_CreateFile("ML/LOGS/HW_TEST.LOG");
-    if (lf) {
-        char buf[256];
-        snprintf(buf, sizeof(buf),
-            "=== HW_TEST LOG (QEMU sync path) ===\n"
-            "Model: 0x%x %s %s\n"
-            "Boot: startupInitializeComplete ML_init OK\n"
-            "NOTE: Module task does not run in QEMU (no DryOS scheduler)\n"
-            "This log proves the FIO file I/O mechanism works end-to-end.\n"
-            "On real hardware, hw_test.mo writes a full 22-test log here.\n",
-            camera_model_id, camera_model, firmware_version);
-        FIO_WriteFile(lf, buf, strlen(buf));
-        FIO_CloseFile(lf);
-        printf("[BOOT] Created ML/LOGS/HW_TEST.LOG (sync proof)\n");
-    } else {
-        printf("[BOOT] Failed to create HW_TEST.LOG\n");
-    }
-}
-#endif
+    ml_started = 1;
 }
 
 /** Blocks execution until config is read */

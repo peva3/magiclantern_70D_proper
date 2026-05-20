@@ -20,3 +20,4 @@ selftest
 silent
 ptptun
 hw_test
+ramdump

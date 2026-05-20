@@ -56,8 +56,8 @@
 /** Bulb mode is done by going to M mode and setting shutter speed beyond 30s **/
 #define CONFIG_SEPARATE_BULB_MODE
 
-/** We can control audio settings from ML now **/
-#define CONFIG_AUDIO_CONTROLS
+/** We can't control audio settings from ML, YET! ASIF init can corrupt LV on 70D **/
+//~ #define CONFIG_AUDIO_CONTROLS
 
 /** Zoom button can't be used while recording (for Magic Zoom) **/
 //~ #define CONFIG_ZOOM_BTN_NOT_WORKING_WHILE_RECORDING
@@ -81,8 +81,8 @@
 /** We can change ExpSim from ML **/
 #define CONFIG_EXPSIM
 
-/** We can't playback sounds via ASIF DMA **/
-#define CONFIG_BEEP
+/** We can't playback sounds via ASIF DMA (causes LV display corruption on 70D) **/
+//~ #define CONFIG_BEEP
 
 /** This camera has no trouble saving Kelvin and/or WBShift in movie mode **/
 #define CONFIG_WB_WORKAROUND
@@ -133,8 +133,8 @@
 /** You can configure separate AFMA values for both wide and tele ends */
 #define CONFIG_AFMA_WIDE_TELE
 
-/** Hide Canon bottom bar from DebugMsg hook - enabled to help with FlexInfo flickering */
-#define CONFIG_LVAPP_HACK_DEBUGMSG
+/** Hide Canon bottom bar from DebugMsg hook */
+//#define CONFIG_LVAPP_HACK_DEBUGMSG
 
 /** Workaround for menu timeout in LiveView */
 #define CONFIG_MENU_TIMEOUT_FIX

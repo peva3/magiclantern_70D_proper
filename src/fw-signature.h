@@ -43,6 +43,7 @@
 //#define SIG_M50_102  0x3b70901c // from E0040000
 #define SIG_M50_110  0x05EDBC80 // from E0040000
 #define SIG_M6II_111 0x3438de7d // from E0040000
+#define SIG_90D_111  0x00000000 // TBD: compute from ROM dump (CRC32 of first 64KB at MAIN_FIRMWARE_ADDR)
 #define SIG_R_180    0x1474d0f5 // from E0040000
 #define SIG_R5_152   0xf10e9902 // from E0100000
 #define SIG_R6_150   0x129372a8 // from E0100000
