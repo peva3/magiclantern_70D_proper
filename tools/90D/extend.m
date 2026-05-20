@@ -1,55 +1,47 @@
-' Canon EOS 90D — CBasic RAM Enumeration Script
-' This script leverages the CBasic interpreter (Canon Basic)
-' to probe memory layout, dump firmware info, and save RAM
-' regions to the SD card for offline analysis.
+' Canon EOS 90D — CBasic RAM Enumeration Script (v2)
+' 
+' CRITICAL: CBasic PRINT output goes to the **serial/UART console** only,
+' NOT the camera LCD screen. You will NOT see anything on the camera display.
+'
+' To see output you need one of:
+'   1. Serial cable on the camera UART pins (115200 baud)
+'   2. Check the SD card after boot for new files (EXTEND.LOG, etc.)
+'   3. Look for a brief camera LED flash or boot delay as sign of execution
 '
 ' Deployment:
-' 1. Format SD card as FAT32
-' 2. Run: python3 tools/card-flags/edit_card_flags.py /dev/sdX1 --script --bootdisk --eos-develop
-' 3. Copy this file as "extend.m" to the SD card root
-' 4. Insert into 90D, power on
-' 5. Results appear on screen and in files on card
-'
-' Canon Basic syntax reference:
-'   call("eventproc_name") — call firmware eventproc
-'   &HXXXXXXXX — hex literal
-'   MEM(address) — read memory word
-'   MEM(address) = value — write memory word
-'   FIO functions — standard file I/O
-'   printf("string") — serial/UART output
-'
-' Phase 1: Verify script execution and dump firmware metadata
+'   1. SD card MUST be FAT32 (EXFAT does NOT support SCRIPT flag!)
+'   2. python3 tools/card-flags/edit_card_flags.py /dev/sdX1 --script --bootdisk --eos-develop
+'   3. Copy this file as "extend.m" to SD card root
+'   4. Insert card, power on camera, wait 10 seconds, power off
+'   5. Examine SD card on computer for any new files
 
-PRINT "=== CBasic 90D Enumeration ==="
-PRINT "Boot time: ", GETTIME
-PRINT "Firmware version: "
+PRINT "=== CBasic 90D v2 ==="
+
+' --- Test 1: system info ---
+PRINT "Testing firmware calls..."
 call("dumpf")
 
-' Phase 2: Probe RAM size and memory regions
-' Canon DIGIC 8 typical RAM layout: 0x40000000-0x80000000 (1-2GB)
-' We probe in 256MB increments to avoid watchdog timeouts
+' --- Test 2: RAM probe ---
+PRINT "RAM probe at 0x40000000:"
+v0 = MEM(&H40000000)
+PRINT "MEM(0x40000000) = ", v0
+v4 = MEM(&H40000004)
+PRINT "MEM(0x40000004) = ", v4
 
-PRINT "=== RAM Region Probe ==="
-PRINT "Probing RAM at 0x40000000"
-PRINT "Word at 0x40000000: ", MEM(&H40000000)
-PRINT "Word at 0x40000004: ", MEM(&H40000004)
-PRINT "Word at 0x40000008: ", MEM(&H40000008)
-PRINT "Word at 0x4000000C: ", MEM(&H4000000C)
+' --- Test 3: attempt file creation via FIO eventprocs ---
+' These may fail if eventprocs require args that CBasic can't pass
+PRINT "Attempting file creation..."
+call("FIO_CreateFile")
+call("FIO_RemoveFile")
 
-' Phase 3: Try to call eventprocs for task/system info
-' These may or may not work depending on which eventprocs are registered
-PRINT "=== Eventproc Tests ==="
+' --- Test 4: identify camera ---
+' Try known eventproc names from firmware
+PRINT "Camera identification..."
+call("GetCameraModel")
+call("GetFirmwareVersion")
 
-' dumpf already called above
-' Try other known eventprocs
-PRINT "Testing task eventproc..."
-' call("task_create")  ' might crash — careful
-
-PRINT "Testing memory eventproc..."
-' call("sysmem_info")  ' might crash
-
-PRINT "=== Script Complete ==="
-PRINT "Check serial output for dumpf results"
-PRINT "If you see this message, CBasic is working on the 90D!"
-
-' End of extend.m
+' --- Script complete ---
+PRINT "=== EXTEND.M DONE ==="
+PRINT "If nothing appeared on screen, that's NORMAL."
+PRINT "Check SD card for new files or connect serial cable."
+PRINT "Script executed at boot time."
