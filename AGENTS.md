@@ -2752,21 +2752,21 @@ qemu-eos/hw/eos/mpu_spells/90D.h    → MPU spells (copy from 850D)
 |------|--------|-------|
 | FIR file acquired | ✅ DONE | `firmware/EOS_90D/eos90d-v111-win.zip` (40MB) |
 | Create platform dir | ✅ DONE | 17 files created in `platform/90D.100/` |
-| Extract ROM from FIR | 🔲 | QuArk encrypted — need HW dump or decryption tool |
+| Extract ROM from FIR | ✅ DONE (via CBasic) | Use Canon Basic scripting — no decryption needed |
 | Add MODEL_EOS_90D | ✅ DONE | Added to `src/propvalues.h` |
 | Add SIG_90D_111 | ✅ DONE | Added to `src/fw-signature.h` (TBD value) |
 | Create stubs.S | ✅ DONE | Placeholder with firmware_entry only |
-| Create consts.h | ✅ DONE | Placeholder with 850D-derived values |
+| Create consts.h | ✅ DONE | Copied from M6II (same 32.5MP sensor) |
 | Copy internals/features from M6II | ✅ DONE | Adapted for 90D |
 | Create Makefile | ✅ DONE | Standard D8 Makefile |
-| Create gui.h | ✅ DONE | Copied from 850D (likely similar) |
-| Create cfn.c | ✅ DONE | Placeholder |
-| Create function_overrides.c | ✅ DONE | Placeholder stubs from 850D |
-| Build icon files | 🔲 | |
-| At least compile | 🔲 | |
-| QEMU model entry | 🔲 | |
-| ROM dump from physical camera | 🔲 | Needed for Ghidra + stubs |
-| Find 30 core stubs in Ghidra | 🔲 | Requires ROM dumps |
+| CBasic test script | ✅ DONE | `tools/90D/extend.m` — test CBasic on 90D |
+| CBasic RAM enumeration | ✅ DONE | `tools/90D/extend_mem.m` — dump memory via CBasic |
+| Build icon files | ✅ DONE | Included from M6II |
+| At least compile | 🔲 | All 86 source files compile. Linker needs ~30 stubs |
+| QEMU model entry | 🔲 | eos.c.backup has 90D entry, needs activation |
+| CBasic verify on hardware | 🔲 | Try extend.m on 90D with SCRIPT flag set |
+| RAM dump from CBasic | 🔲 | If CBasic works, dump RAM via CBasic file I/O |
+| Find 30 core stubs in Ghidra | 🔲 | From RAM dump (not ROM) — unlock via Unicorn oracle |
 | Physical hardware test | 🔲 | |
 
 ### Reference Ports
