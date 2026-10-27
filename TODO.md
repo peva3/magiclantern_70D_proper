@@ -1458,3 +1458,111 @@ hw_test v19 dumps 3 RAM regions (33MB total) to SD card. Analysis on development
 - [ ] **P2: SPISI SIO channel** — DIGIC V default is channel 4; 70D may differ
 - [ ] **P2: Card LED assert risk** — 70D may write different LED values than handled
 - [ ] **P2: ML SD image** — build a proper sd.qcow2 with 468KB autoexec + 32 modules
+
+---
+
+## Sprint 46 — 70D Audit Remediation (2026-10-27) — COMPLETE
+
+**Status:** ✅ All 62 tasks done. Build 438.4KB (448,928 bytes), 34 modules,
+157,024 bytes of headroom against the real 605,952-byte budget.
+**Verification:** `./validate_build.sh` passes; every affected module and the full
+platform build compile clean under `-Werror`.
+
+**Extra critical bug found while working this list (not in the original audit):**
+`modules/selftest/selftest.c` guarded `call("TurnOnDisplay")` with
+`#ifndef CONFIG_70D` — which is always true in modules — so `selftest.mo` would
+have hard-frozen a real 70D. Converted to a runtime `is_camera()` check.
+
+
+**Source:** Four-way audit of all 70D-specific code we authored, run immediately after the
+upstream `dev` merge (`5a5ea05b35`). Full detail with file:line and rationale is in
+`.opencode/wiki/entities/70d-audit-2026-10.md`.
+
+**Baseline at sprint start:** `autoexec.bin` 454,304 B, 32 modules, clean build.
+**Chunked into 62 tasks** across 8 areas. Each task is independently buildable.
+
+### Chunk A — hw_test module (highest value)
+
+- [x] **S46.01** Replace `#ifdef CONFIG_70D` with runtime `is_camera("70D","1.1.2")` — 5 guard sites (572, 821, 932, 1328, 1655) + `CONFIG_EOSM` at 49/395/1182. Modules are never compiled with `-DCONFIG_70D`, so these blocks are dead code (proven via `strings modules/build/hw_test.mo`). Also delete now-unused `ip_buf` (944) which would break `-Werror`.
+- [x] **S46.02** Remove destructive factory-calibration `call()`s from auto-run: `FA_CheckSD`, `FA_ChkAssembly`, `FA_AdjustWhiteBalance`, `FA_LvDetectDefectsFull`, `FA_DarkAdjAutoExecute` (1582-1601).
+- [x] **S46.03** Remove `FA_DISP_Start100White/50Gray/Color/Mix` + `FA_DISP_SetBrightness` (1611-1629) — no matching `FA_DISP_End*`, leaves LCD in factory test mode.
+- [x] **S46.04** Remove the `EngDrvOut(0xC0F14080, ...)` palette write (1066-1074) — only register write in a read-only module; corrupts background colour.
+- [x] **S46.05** Add `skip()` helper; fix ~21 `rst()` sites that pass a reason on the failing branch, demoting real failures to SKIP (400, 698, 751, 864, 960, 980, 1012, 1074, 1089, 1162, 1266, 1335, 1348, 1361, 1374, 1435, 1469, 1497, 1532, 1630, 1689, 1727).
+- [x] **S46.06** Fix tautological / hardcoded-PASS tests (402, 761, 818, 922, 966, 972, 1027, 1045, 1057, 1324, 1601, 1710, 1727).
+- [x] **S46.07** Verify stubs by memory read instead of `call()`: `NwLimeInit`/`NwLimeOn` (1279-1295), `GPS_Initialize`, `InitializePTPFrameworkController` (1643), `AdjustFocusLens` (1023 — physically drives the lens).
+- [x] **S46.08** Fix Dual ISO `CMOS[3]` reads: unaligned 32-bit `MEM()` at `0x404e5667` (%4==3) and `0x404e77d9` (%4==1); CMOS[3] is a flag byte, not an ISO code — drop the ISO comparison.
+- [x] **S46.09** Replace `shamem_read()` with `MEM()` outside the `0xC0Fxxxxx` ENGIO window (315, 1462, 1490, 1661, 1662, 1699); rename `CMOS_0_WR`/`ADTG_WR` → `*_FN` (they are code addresses).
+- [x] **S46.10** Rename misleading `CMOS_0_ADDR` (1659) — points at `0xC0F06008` = FPS Timer A; use real CMOS ISO base `0x404E5664`.
+- [x] **S46.11** Harden RAM-dump heuristic (1230-1266): probing only the first word can Data Abort; `ok` starts at 1 so all-skipped regions count as success.
+- [x] **S46.12** Run the suite in a separate task instead of inline `MODULE_INIT` (1748-1756); drop `bmp_off()` (1743) which mutes ML overlay permanently.
+- [x] **S46.13** Fix `create_named_semaphore("HW_TEST", 1)` leak (1099) — add `delete_semaphore`.
+- [x] **S46.14** Fix register baseline table (1129-1138): encodes LV-active state impossible at boot; `FPS_TB` baseline `0x000005F4` contradicts documented `0x05F5`.
+- [x] **S46.15** Fix `sd_bench()` arithmetic (325-360): `int total = block_size*blocks` overflow, `dt*1024` 32-bit wrap, mid-loop write failure still publishes throughput.
+- [x] **S46.16** Fix card-path discovery (464-474) — finds working prefix then discards it; later paths hardcode `ML/...`.
+- [x] **S46.17** Widen 80-byte log buffers (1595, 1624) to keep the `NOT_FOUND` suffix.
+- [x] **S46.18** Fix `%d` on `uint32_t` (354, 356, 1523, 1524, 1531, 1701).
+- [x] **S46.19** Fix "cycle 8 colour schemes" (1037-1057) — `bmp_color_scheme` is 2-state.
+- [x] **S46.20** Null-check the reopened `log_fp` in `log_flush()` (89-95).
+- [x] **S46.21** NITs: duplicate `#include <dryos.h>`, stale header contract comment, `PTPIP: %d/%d` counting `LiveViewWifiApp`, `socket_close_valid` vs `socket_close_if_valid`, `#define ISOS 7` leaking, `info("")` noise.
+
+### Chunk B — ptp-chdk + camtunnel.py
+
+- [x] **S46.22** `src/ptp-chdk.c:593` — add missing `break;` in `case PTP_CHDK_ExecuteScript:`; every script upload currently reports `PTP_RC_ParameterNotSupported`.
+- [x] **S46.23** `camtunnel.py:113` — `struct.pack('<HHII', ...)` writes Length as 16-bit → `'<IHHI'`; drop the zero-padding to 5 params (116).
+- [x] **S46.24** `camtunnel.py:138` — 4-item format unpacked into 5 names → `ValueError` on every command; use `plen, rtype, code, tid = struct.unpack_from('<IHHI', ...)`.
+- [x] **S46.25** `camtunnel.py:219-229` — read the data phase before the response (C side sends data first); and filter container `Type` so PTP events aren't parsed as responses (136-145).
+- [x] **S46.26** `camtunnel.py` NITs: `0xFFFFFFFF` error sentinel (227), 12-byte data-container header stripped inconsistently (238-246), `propget` sends a property ID to a memory read (399-402), no `set_configuration()`/USBError handling (96-107), unused `hdr_len` (214).
+
+### Chunk C — ptptun module
+
+- [x] **S46.27** `ptptun.c:204,216` — `shamem_read(param2)` on host-supplied addresses → `MEMX()`.
+- [x] **S46.28** `ptptun.c:210` — unbounded `EngDrvOut(param2, param3)`; add an ENGIO allow-list.
+- [x] **S46.29** `ptptun.c:356` — `if (r >= 0 || r == -1)` tautology reports `dumpf` failure as PASS.
+- [x] **S46.30** `ptptun.c:290,390` — PTP opcode registered twice (self-test re-registers) → guaranteed false negative.
+- [x] **S46.31** `ptptun.c:119-123` — ConsoleCapture picks the lowest-numbered stale log then deletes it; snapshot names before `dumpf`, prefer newly-created, copy instead of delete.
+- [x] **S46.32** `ptptun.c` correctness: `if (size < 5)` rejects short payloads (76) → `< 2`; stack 0x1000 → 0x2000 (402); validate property size before `prop_request_change` (229); tautological self-tests (302-315, 373-378); ExecuteLua filename naming (187-199).
+
+### Chunk D — wifi modules
+
+- [x] **S46.33** `wifisrv.c:155-157,172-176` — LV read from `0x7CFEC` (EVF state-object pointer slot, not a flag) → use `extern volatile int lv`.
+- [x] **S46.34** `wifisrv.c:165-169` — shutter discards `call("FA_RemoteRelease")` result and always replies `REMOTE_OK`; add `schedule_remote_shot()` fallback.
+- [x] **S46.35** `wifisrv.c:101-112,205` — fn pointers installed before validation and only `verified >= 4` required.
+- [x] **S46.36** `wifisrv.c` robustness: partial `send()` treated as fatal (118-128), blocking `recv` with no timeout (139), deinit leaves task+socket alive (277-281), only `buf[0]` interpreted (137-143), unbounded port accumulation (88-91), `setsockopt` return type (37), `remote_shot_flag` type (43).
+- [x] **S46.37** `wifi_test.c:160` — `addr.sin_family = 1` → `SOCK_FAMILY_IPv4`; also missing-name `call()`s (110-119, 224-235), fabricated fds (202-212), `connect()` on a listening socket (164-167), `/4` vs 5 names (191).
+- [x] **S46.38** Delete orphaned `modules/wifi_enable/` — calls `LughConnect` which is absent from the 70D eventproc table.
+- [x] **S46.39** Rename `wifi_test` → `wifitst` (≤8 chars, FAT 8.3 / TCC symbol lookup).
+
+### Chunk E — platform/70D.112 + stubs
+
+- [x] **S46.40** `consts.h:127-128` — `HOTPLUG_VIDEO_OUT_*_ADDR` defined to 0 but consumed under `#ifdef` then dereferenced (`src/audio-common.c:1024`). Delete the defines or add a runtime value test.
+- [x] **S46.41** `platform/70D.112/Makefile:26-29` — `CONFIG_QEMU ?= n` is a no-op; `CONFIG_QEMU=y make` silently yields a hardware build. Use `override` before the include.
+- [x] **S46.42** Reconcile doc-vs-code: `FEATURE_FPS_OVERRIDE` (features.h:17 vs AGENTS §2), `CONFIG_AUDIO_CONTROLS` (internals.h:60 vs AGENTS), `FEATURE_FOCUS_STACKING` (features.h:23 vs AGENTS).
+- [x] **S46.43** `features.h` cleanup: `FEATURE_KEN_ROCKWELL_ZOOM_5D3` (41) does not exist in the tree; `FEATURE_AUDIO_METERS`/`FEATURE_AUDIO_REMOTE_SHOT` (36-37) force-enabled without audio controls.
+- [x] **S46.44** `internals.h` fixes: header says "70D 1.1.1A" (2) → 1.1.2; add missing `CONFIG_ZOOM_X1` (peers all define it; `shoot.c` has 5 `#ifdef` blocks — verify on hardware).
+- [x] **S46.45** `stubs.S:135-136` — same address `0x00059CE8` documented for both `socket_accept` and `socket_recv`; no accept NSTUB exists. Also add `socket_convertfd` NSTUB.
+- [x] **S46.46** NITs: `consts.h:232` comment `0x9dd6c+0x2` → `0x9dd64+0x2c`; `cfn.c:9-10` "POS 8" vs `some_cfn[7]`; `stubs.S:87` uppercase `0X`; `Makefile:15-17` stale bitrate comment; unused `GUIMODE_SIGNATURE`; `#undef UNAVI_FEEDBACK_TIMER_ACTIVE`.
+
+### Chunk F — src/ 70D blocks
+
+- [x] **S46.47** `focus.c:1020-1076,1093-1098` — focus confirmation from lens position stability gives false positives and feeds trap focus → **out-of-focus trap shots**. Gate trap focus on a real signal; keep stability as UI hint only.
+- [x] **S46.48** `falsecolor.c:24-38` + `zebra.c:3005-3021` — "Custom min/max IRE" (0-100) compared against raw luma 0-255 → convert.
+- [x] **S46.49** `falsecolor.c:37,132-136` — clamp palette index (`false_colour` has 6 rows; 7+ or negative from stale CFG is OOB).
+- [x] **S46.50** `falsecolor.c:68-78` — palette 6 substituted with Marshall in LV (the only LV renderer) → build a 256-byte ramp; also let the preview draw palette 6.
+- [x] **S46.51** `lens.c:785-799` — job_state timeout skips the step without setting `lv_focus_error`, and `lens_focus()` returns success → rack focus/stacking silently do nothing; fix indentation of 800-865.
+- [x] **S46.52** `flexinfo.c:415-441` — dead `CONFIG_70D` layout block with false rationale (file is inside `#ifdef FEATURE_FLEXINFO` which features.h undefines).
+- [x] **S46.53** `flexinfo.c:33-41` — crop-factor clone missing `|| defined(CONFIG_70D)`; 70D always reports 16 even in digital-zoom movie mode.
+- [x] **S46.54** `tweaks.c:1445-1451` — `BGMT_PRESS_METERING_OR_AFAREA` only exists as a comment in `platform/70D.112/gui.h:76`; `tweaks.c:240-246` — empty `if` then backlight change with display off.
+- [x] **S46.55** `reboot.c:189-193` — writes index 36 of a string literal (the trailing `.`, not a slot letter) → always `'A'`, mutates `.rodata`.
+- [x] **S46.56** Dead/duplicate 70D code: `config.c:926-932` `config_init_early()` no callers; `property.h:377-383` re-defines 3 macros already at 357/361/362; `focus.c:1002` registers `PROP_LV_FOCUS_DATA` handler for a property the 70D lacks; `focus.c:909-913,1028` empty scaffold + `update_focus_pos_70d` outside its feature guard.
+
+### Chunk G — ramdump module
+
+- [x] **S46.57** `ramdump.c:66-70` — "Serial Flash" dump reads `0x00000000`, which is DryOS module code, not serial flash (not memory-mapped). Use the SPI stubs from `modules/dev_tools/sf_dump/`, size from device capacity.
+- [x] **S46.58** `ramdump.c:45-50` — 256 KB chunks silently dropped with no offset record → dump is not address-mappable (512 MB → 509 MB); `0xAAAAAAAA` not filtered.
+- [x] **S46.59** `ramdump.c` integrity: short `FIO_WriteFile` still advances offset (51-55); no clamp of last chunk (43-51); 500 MB dump runs inside `MODULE_INIT` with no free-space check (120-127); "Skipped: %d pages" counts chunks (26); no README.
+
+### Chunk H — scripts & tools
+
+- [x] **S46.60** `create_sd_image.sh` — unchecked `mtools` dependency (line 62 unguarded under `set -e`); `mcopy` without `-s` on a directory tree (83); `--no-clean` parsed but unused (21-24); trap quoting (41); truncated `sd.qcow2` reuse (46); stale `.mo` files survive (57-59).
+- [x] **S46.61** `test_qemu.sh` — raw image with `format=qcow2` + missing `format_sd_fat32.py` (128-135); `FW_VER` fallthrough to 202 for 80D/7D/7D2 (36-49); `-d` glued into one argv element (85-94); `cf_driver_interrupt` grep always true (131); two writers to `$SERIAL_LOG` (136/170); EOSM2 placeholder slice crash (143-153).
+- [x] **S46.62** Remaining scripts: `test_70d_qemu.sh` (unreachable build-failed branch, `--display` no-op/no headless default, arithmetic on `"?"`); `validate_build.sh` (size gate 671,088 → 605,952, never `exit 1`); `deploy.sh` (no `set -e`, dir never created, still prints success); `analyze_hw_test.py` (greps `[HW_TEST]` but producer writes `[HW]`, wrong log path, always exit 0); `card-flags` (BPB offset, ASCII flag compare, exit codes, EXFAT VBR checksum); `tools/90D/*.m` (no drive prefix, no `FIO_WriteFile`, 2-arg `PRINT`).

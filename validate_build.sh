@@ -1,87 +1,112 @@
 #!/usr/bin/env bash
-# Validate the hw_test build without requiring QEMU execution
+# Validate the 70D build without requiring QEMU execution.
+# Exits non-zero if anything is wrong, so it is usable in a CI chain.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/platform/70D.112/build"
 MODULES_DIR="$BUILD_DIR/modules"
 
+# The real Magic Lantern budget on this body is what src/boot-d45-am.c reserves:
+#   0x4E0000 - RESTARTSTART(0x44C100) = 0x93F00 = 605952 bytes
+# Older notes quoting "656KB" are wrong; 656KB is the AllocateMemory pool extent
+# (0x4E0000..0xD3C000), not the payload budget.
+MAX_SIZE=605952
+
+filesize() {
+    stat --format="%s" "$1" 2>/dev/null || stat -f "%z" "$1" 2>/dev/null || echo 0
+}
+
+FAILED=0
+fail() { echo "✗ $*"; FAILED=1; }
+
 echo "=== Build Validation Report ==="
 echo "Date: $(date)"
 echo "Build Dir: $BUILD_DIR"
 echo ""
 
-# Check autoexec.bin
+# --- autoexec.bin ---------------------------------------------------------
 if [[ -f "$BUILD_DIR/autoexec.bin" ]]; then
-    SIZE=$(stat -c%s "$BUILD_DIR/autoexec.bin")
-    SIZE_KB=$((SIZE / 1024))
-    echo "✓ autoexec.bin: ${SIZE_KB}KB (${SIZE} bytes)"
-    if [[ $SIZE -lt 671088 ]]; then  # 656KB limit
-        echo "  Size OK: Under 656KB limit"
+    SIZE=$(filesize "$BUILD_DIR/autoexec.bin")
+    echo "✓ autoexec.bin: $((SIZE / 1024))KB (${SIZE} bytes)"
+    if [[ $SIZE -lt $MAX_SIZE ]]; then
+        echo "  Size OK: $((MAX_SIZE - SIZE)) bytes of headroom (budget ${MAX_SIZE})"
     else
-        echo "  ⚠️  WARNING: Exceeds 656KB limit!"
+        fail "autoexec.bin is ${SIZE} bytes, over the ${MAX_SIZE} byte budget"
     fi
 else
-    echo "✗ autoexec.bin: NOT FOUND"
+    fail "autoexec.bin: NOT FOUND"
 fi
 echo ""
 
-# Check modules
+# --- modules --------------------------------------------------------------
 echo "=== Modules ==="
-for mod in hw_test crop_rec dual_iso sd_uhs mlv_lite; do
+for mod in hw_test crop_rec dual_iso sd_clock mlv_lite ptptun wifisrv wifitst ramdump; do
     if [[ -f "$MODULES_DIR/${mod}.mo" ]]; then
-        SIZE=$(stat -c%s "$MODULES_DIR/${mod}.mo")
-        echo "✓ ${mod}.mo: ${SIZE} bytes"
+        echo "✓ ${mod}.mo: $(filesize "$MODULES_DIR/${mod}.mo") bytes"
     else
-        echo "✗ ${mod}.mo: NOT FOUND"
+        fail "${mod}.mo: NOT FOUND"
     fi
 done
 echo ""
 
-# Check symbol file
+# --- symbol file ----------------------------------------------------------
 if [[ -f "$BUILD_DIR/70D_112.sym" ]]; then
     echo "✓ Symbol file: 70D_112.sym"
 else
-    echo "✗ Symbol file: NOT FOUND"
+    fail "Symbol file: NOT FOUND"
 fi
 echo ""
 
-# Check SD image
-if [[ -f "$BUILD_DIR/sd.qcow2" ]]; then
-    echo "✓ SD image: sd.qcow2"
-else
-    echo "✗ SD image: NOT FOUND (run create_sd_image.sh)"
-fi
-echo ""
-
-# Check module source
+# --- module sources -------------------------------------------------------
 echo "=== Source Validation ==="
-if [[ -f "$SCRIPT_DIR/modules/hw_test/hw_test.c" ]]; then
-    echo "✓ hw_test.c exists"
-    grep -c "MODULE_INIT" "$SCRIPT_DIR/modules/hw_test/hw_test.c" > /dev/null 2>&1 && echo "  ✓ MODULE_INIT found" || echo "  ✗ MODULE_INIT missing"
-    grep -c "hw_test_init" "$SCRIPT_DIR/modules/hw_test/hw_test.c" > /dev/null 2>&1 && echo "  ✓ hw_test_init function found" || echo "  ✗ hw_test_init missing"
+for src in modules/hw_test/hw_test.c modules/ptptun/ptptun.c modules/wifisrv/wifisrv.c \
+           modules/wifitst/wifitst.c modules/ramdump/ramdump.c; do
+    if [[ -f "$SCRIPT_DIR/$src" ]]; then
+        echo "✓ $src"
+    else
+        fail "$src: NOT FOUND"
+    fi
+done
+
+if grep -q "MODULE_INIT" "$SCRIPT_DIR/modules/hw_test/hw_test.c"; then
+    echo "  ✓ hw_test MODULE_INIT found"
 else
-    echo "✗ hw_test.c: NOT FOUND"
+    fail "hw_test MODULE_INIT missing"
 fi
 echo ""
 
-# Check modules.included
-if grep -q "hw_test" "$SCRIPT_DIR/platform/70D.112/modules.included"; then
-    echo "✓ hw_test in modules.included"
-else
-    echo "✗ hw_test NOT in modules.included"
-fi
+# --- modules.included -----------------------------------------------------
+echo "=== modules.included ==="
+for mod in hw_test ptptun wifisrv wifitst ramdump sd_clock; do
+    if grep -qx "$mod" "$SCRIPT_DIR/platform/70D.112/modules.included"; then
+        echo "✓ $mod"
+    else
+        fail "$mod NOT in modules.included"
+    fi
+done
+echo ""
+
+# --- no leftover renames --------------------------------------------------
+echo "=== Renamed modules ==="
+for old in wifi_test wifi_enable sd_uhs; do
+    if [[ -e "$SCRIPT_DIR/modules/$old" ]]; then
+        fail "modules/$old still exists (renamed/removed)"
+    else
+        echo "✓ modules/$old gone"
+    fi
+done
 echo ""
 
 echo "=== Register Addresses (from crop_rec.c) ==="
-grep -i "0x26B54\|0x2684C\|0xFF2BC6C4" "$SCRIPT_DIR/modules/crop_rec/crop_rec.c" | head -3 || echo "Not found in crop_rec.c"
+grep -io "0x26B54\|0x2684C\|0xFF2BC6C4" "$SCRIPT_DIR/modules/crop_rec/crop_rec.c" | sort -u | head -3 || echo "Not found in crop_rec.c"
 echo ""
 
-echo "=== Next Steps ==="
-echo "1. Build verified - ready for hardware testing"
-echo "2. Copy autoexec.bin to SD card"
-echo "3. Boot 70D with ML"
-echo "4. hw_test module will run automatically"
-echo "5. Check ML/LOGS/hw_test_full.txt for results"
-echo ""
-echo "=== Validation Complete ==="
+if [[ $FAILED -eq 0 ]]; then
+    echo "=== Validation PASSED ==="
+    echo "Next: copy build/70d-latest/autoexec.bin to the card, or run ./deploy.sh"
+    echo "Then ML menu -> Debug -> 'HW Test' / 'Dump RAM + serial flash'."
+else
+    echo "=== Validation FAILED ==="
+    exit 1
+fi

@@ -37,6 +37,8 @@
 #define BGMT_UNPRESS_ZOOM_IN 0xf
 
 #define BGMT_LV 0x1E
+/* NOTE: on the 70D the REC and LV buttons share code 0x1E.
+ * Dispatch on the current GUI mode, never on the code alone. */
 #define BGMT_Q 0x1d
 #define BGMT_UNPRESS_UDLR 0x36
 

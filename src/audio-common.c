@@ -1021,7 +1021,10 @@ static const char* get_audio_input_string()
 
 static void audio_monitoring_force_display(int x)
 {
-    #ifdef HOTPLUG_VIDEO_OUT_PROP_DELIVER_ADDR
+    /* Some ports define the address as 0 to mean "this camera has no such
+     * node".  A plain #ifdef would then compile a dereference of address 0
+     * (data abort).  Test the value instead. */
+    #if HOTPLUG_VIDEO_OUT_PROP_DELIVER_ADDR
     prop_deliver(*(uint32_t **)(HOTPLUG_VIDEO_OUT_PROP_DELIVER_ADDR), &x, 4, 0x0);
     #endif
 }

@@ -12,8 +12,9 @@ PLATFORM_ARCH = armv5te
 
 ML_SRC_EXTRA_OBJS = $(BUILD_DIR)/afma.o $(BUILD_DIR)/reloc.o
 
-#we keep rec indicators enabled but
-#bitrate stuff is disabled in features.h
+# The 70D uses the 5D3 bitrate implementation.  Note that bitrate/nitrate
+# control is NOT disabled: FEATURE_NITRATE comes from all_features.h, and the
+# original `#undef FEATURE_NITRATE` was dropped from features.h long ago.
 ML_BITRATE_OBJ = bitrate-5d3.o
 
 # Load ML at the beginning of the AllocateMemory pool
@@ -23,10 +24,14 @@ ML_BOOT_OBJ = boot-d45-am.o
 
 include ../Makefile
 
-# QEMU: Enable synchronous module loading for reliable testing and set to y for QEMU builds
-# (Disabled by default n for hardware builds. Use: make CONFIG_QEMU=y for QEMU testing)
-# (Must be set AFTER include ../Makefile to override platform default)
-CONFIG_QEMU ?= n
+# QEMU builds: pass the flag as a make VARIABLE, i.e.
+#     make CONFIG_QEMU=y
+# Do NOT use an environment assignment (`CONFIG_QEMU=y make`): ../Makefile
+# assigns CONFIG_QEMU = n unconditionally during the include above, and
+# Makefile.globals has already evaluated it, so an environment value is
+# silently ignored and you get a HARDWARE build.  A stray CONFIG_QEMU=y in a
+# hardware build is how the red-LED hang happens, so there is deliberately no
+# `?=` here - it cannot override anything and only misleads. */
 # CFLAGS += -DCONFIG_QEMU  (handled by Makefile.globals when CONFIG_QEMU=y)
 
 .DEFAULT_GOAL := $(BUILD_DIR)/cam_complete

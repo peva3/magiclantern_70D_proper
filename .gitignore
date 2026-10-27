@@ -17,6 +17,7 @@ a.out
 *.raw
 *.dis
 chdk
+!qemu-eos/hw/eos/
 eos
 font-*.c
 font-*.in

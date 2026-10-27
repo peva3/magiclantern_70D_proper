@@ -61,7 +61,7 @@ This folder (`70d-latest/`) is the designated deployment location for all verifi
 | 2026-04-30 | 457KB | 457KB | hw_test v19: RAM dump for offline RE (LOWER 16MB, ISO 1MB, UPPER 16MB). RAM dumps analyzed: found Canon DLNA Media Server, WiFi SDIO driver, remote shot functions, AF remote control, ADTG register patterns. |
 | 2026-04-30 | 457KB | 457KB | FULL 512MB RAM dump (0x40000000-0x5FFFFFFF) extracted via ramdump module. 509MB data, ~12K strings, 520+ callable functions, full symbol table (270+ ML symbols), 30+ PROP_ IDs mapped, 55 source file paths found. |
 | 2026-04-30 | 457KB | 457KB | S30: WiFi TCP server (wifisrv v2), GPS/defect/dual-ISO probes. hw_test v20-v23: unified probes, config_rw fix, all latent build bugs fixed (crop_rec brace, mlv_3 session/falthrough, worker.c strncpy). Build system fix: hw_test added to ML_MODULES, stale .mo prevention. |
-| 2026-04-30 | 457KB | 457KB | hw_test v27: 35 PASS / 5 SKIP / 0 FAIL. FPS stability (range=0, rock-solid). ADTG/crop registers. Extended call() tests (GetHDMIInfo, FA_GetProperty, TurnOffDisplay work). config_rw PASS. Pre-deployment test suite (tests/run_all.sh: symbol check + syntax + build size). 3 dead probe modules deleted. All 28 70D modules auto-build. |
+| 2026-04-30 | 457KB | 457KB | hw_test v27: 35 PASS / 5 SKIP / 0 FAIL — **these numbers are not trustworthy**, see Sprint 46 (all `#ifdef CONFIG_70D` blocks were dead code). FPS stability (range=0, rock-solid). ADTG/crop registers. Extended call() tests (GetHDMIInfo, FA_GetProperty, TurnOffDisplay work). config_rw PASS. Pre-deployment test suite (tests/run_all.sh: symbol check + syntax + build size). 3 dead probe modules deleted. All 28 70D modules auto-build. |
 
 2. **Documentation Updates:** Keep AGENTS.md and README.md files continuously updated with all findings, changes, and discoveries
 3. **Task Tracking:** Maintain TODO.md with current task status, marking completed items and adding new tasks as discovered
@@ -71,10 +71,11 @@ This folder (`70d-latest/`) is the designated deployment location for all verifi
 7. **Incremental Progress:** Complete work in small, testable chunks - never batch multiple untested changes
 
 **Repository:** https://github.com/peva3/magiclantern_70D
-**Current Phase:** hw_test v27 — 35 PASS / 5 SKIP / 0 FAIL on physical 70D. FPS stability (range=0, rock-solid). ADTG/crop registers. Extended call() tests (GetHDMIInfo, FA_GetProperty, TurnOffDisplay work). Pre-deployment test suite (tests/run_all.sh). All 28 modules auto-build. All automated hardware testing complete in hw_test. Next: manual testing of WiFi, PTP tunnel, Dual ISO
+**Current Phase:** hw_test v28 — runtime camera detection fixed (see Sprint 46); earlier PASS/SKIP/FAIL counts were produced by code that never ran on a 70D. FPS stability (range=0, rock-solid). ADTG/crop registers. Extended call() tests (GetHDMIInfo, FA_GetProperty, TurnOffDisplay work). Pre-deployment test suite (tests/run_all.sh). All 28 modules auto-build. All automated hardware testing complete in hw_test. Next: manual testing of WiFi, PTP tunnel, Dual ISO
     | 2026-05-05 | 461KB | 457KB | CONFIG_AUDIO_CONTROLS enabled, 96kHz sample rate in mlv_snd, HOTPLUG_VIDEO_OUT null guard, sounddev_active_in stub fix |
 | 2026-05-06 | 468KB | 460KB | Sprint 42: Code audit & bug fixes. Removed broken modules, fixed critical crashes in falsecolor/hw_test/wifisrv. See audit findings in Sprint 42 section below. |
 | 2026-05-06 | 468KB | 460KB | Sprint 41: Holy Grail timelapse, live_comp module, custom false color, hw_test fixes |
+| 2026-10-27 | 448928 B (438.4KB) | 445152 B | Sprint 46: 62-task audit remediation. Upstream merge (50 commits). hw_test `#ifdef CONFIG_70D` → runtime `is_camera()`; selftest TurnOnDisplay freeze fix; destructive `FA_*` calls removed; camtunnel struct formats fixed; ptptun address guards; wifisrv LV/shutter; `wifi_test`→`wifitst`, `wifi_enable` deleted; platform consts/features/internals reconciled; focus/falsecolor/lens/flexinfo/tweaks fixes; ramdump rewritten (SPI serial flash + .MAP sidecar + task); scripts rewritten. 34 modules, 157,024 B headroom. |
 
 **Last Updated:** 2026-05-05
 
@@ -180,15 +181,15 @@ The 70D port is heavily configured via feature toggles and memory constants.
 | Flag | Reason |
 |------|--------|
 | `CONFIG_LV_FOCUS_INFO` | **Enabled (using PROP_LV_LENS).** 70D firmware does not expose `LV_FOCUS_DATA`, but we use `PROP_LV_LENS` focus_pos with stability detection. Focus confirmation and Magic Zoom partially restored. |
-| `CONFIG_AUDIO_CONTROLS` | **Enabled (2026-05-05).** Unlocks: analog gain (0-32dB), digital gain, AGC toggle (Canon's auto-level disabled), wind filter, input source (int/ext/balanced), mic power, headphone monitoring, remote audio shot. AK4646 codec. `my_sounddev_task` override disables Canon's AGC. 96kHz sample rate added to mlv_snd. 24-bit mode blocked by missing `SetASIFMode` stub (address unknown on 70D). |
+| `CONFIG_AUDIO_CONTROLS` | **DISABLED** (`internals.h:60` is commented out, and `git log -S` shows it has never been enabled since the initial port `913bed6f74`). Earlier revisions of this document claimed it was enabled on 2026-05-05; that was wrong. Enabling it would unlock analog gain (0-32dB), digital gain, AGC toggle, wind filter, input source (int/ext/balanced), mic power, headphone monitoring and remote audio shot, but ASIF/AK4646 initialisation corrupts LiveView on this body. The AK4646 init sequence and all 17 ASIF functions are documented in `doc/`; 96kHz support exists in `mlv_snd` and works via Canon's own settings. 24-bit mode is additionally blocked by the missing `SetASIFMode` stub. |
 | `CONFIG_FPS_UPDATE_FROM_EVF_STATE` | Doesn't work on 70D. |
 | `CONFIG_BEEP` | Beep support disabled. |
 | `CONFIG_LV_FOCUS_DATA` | No LV_FOCUS_DATA property, but PROP_LV_LENS provides focus_pos. |
-| `FEATURE_FPS_OVERRIDE` | **Enabled (2026-04-25).** Timer B has untraceable issues (banding). Timer A-only via HiJello/FastTv mode (fps_criteria=3) works. Previous QEMU crash was invalid (stale SD image). Build: 462KB. |
+| `FEATURE_FPS_OVERRIDE` | **DISABLED** (`features.h:17` keeps `#undef`; `src/fps-engio.c:607-609` says the same). Earlier revisions of this document claimed it was enabled on 2026-04-25 via Timer A-only; that was never committed. Timer B has untraceable issues (vertical banding), Timer-A-only via HiJello/FastTv (`fps_criteria=3`) was never hardware-validated, and the override interferes with LiveView init. Expect a ~11KB size increase if it is ever turned on. |
 | `FEATURE_RAW_ZEBRAS` | **Broken.** Causes glitches in QuickReview and LiveView. |
 | `FEATURE_FOLLOW_FOCUS` | Disabled (see lens.c). |
 | `FEATURE_RACK_FOCUS` | Disabled (see lens.c). |
-| `FEATURE_FOCUS_STACKING` | Disabled - buggy ("takes 1 behind and 1 before"). |
+| `FEATURE_FOCUS_STACKING` | **DISABLED** (`features.h` now `#undef`s it). Still buggy: "takes 1 behind and 1 before", and it depends on the `lens_focus` job_state path which was itself unsound on this body (a stuck `job_state` used to skip the step and still report success). |
  | `FEATURE_FLEXINFO` | Bottom bar flickers - time/battery display unstable. |
 
 ## 3. Hardware Specifications & Capabilities
@@ -341,7 +342,7 @@ This data is used in `lens.c:1868-1889` for tracking lens position changes and i
 
 ### 8.2 FPS Override - ENABLED (2026-04-25)
 
-**Status:** `FEATURE_FPS_OVERRIDE` is now **enabled** in `platform/70D.112/features.h`.
+**Status:** `FEATURE_FPS_OVERRIDE` is **disabled** in `platform/70D.112/features.h` (`#undef`). This section records the experiment and the Timer A-only workaround; it was never shipped enabled. See the feature table above.
 
 **History:**
 - Originally disabled: "Tried it for a felt hundred hours"
@@ -461,7 +462,13 @@ if (zebra_draw && raw_zebra_enable == 1) raw_needed = 1;
 
 ## 15. Modules (`modules.included`)
 
-**Enabled (28 modules):** adv_int, arkanoid, autoexpo, bench, crop_rec, deflick, dot_tune, dual_iso, edmac, ettr, file_man, img_name, lua, mlv_lite, mlv_play, mlv_snd, pic_view, sd_uhs, selftest, sf_dump, silent, hw_test, wifi_test, raw_vidx, ptptun, wifisrv, adtglog2
+**Enabled (30 modules):** adv_int, arkanoid, autoexpo, bench, crop_rec, deflick, dot_tune, dual_iso, edmac, ettr, file_man, img_name, lua, mlv_lite, mlv_play, mlv_snd, pic_view, **sd_clock**, selftest, sf_dump, silent, hw_test, **wifitst**, raw_vidx, ptptun, wifisrv, adtglog2, ramdump
+
+**Renames/removals (Sprint 46):**
+- `sd_uhs` → `sd_clock` (upstream rename, kept our 70D OFF/160MHz menu restriction)
+- `wifi_test` → `wifitst` (9 chars → FAT 8.3 truncation breaks TCC symbol lookup, same reason `ptp_tunnel` → `ptptun`)
+- `wifi_enable` deleted outright (called `LughConnect`, which does not resolve on this body)
+
 
 **Not built by default:** mlv_rec, raw_vid, raw_vidx, script, io_crypt, bolt_rec, bulb_nd, yolo, fpu_emu
 

@@ -58,7 +58,7 @@ ML_MODULES = \
     raw_video/raw_vidx \
     hw_test \
     wifisrv \
-    wifi_test \
+    wifitst \
     ptptun \
     ramdump
 

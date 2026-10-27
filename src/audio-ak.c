@@ -188,12 +188,12 @@ static int get_mic_power(int input_source)
 static void audio_monitoring_update()
 {
     // kill video connect/disconnect event... or not
-    // HOTPLUG_VIDEO_OUT_STATUS_ADDR may be 0 (not defined) on some cameras.
-    // On DIGIC 4/5, address 0 is mapped, so guard with camera-specific check.
-    #ifdef CONFIG_70D
-    if (HOTPLUG_VIDEO_OUT_STATUS_ADDR)
+    // Some ports define HOTPLUG_VIDEO_OUT_STATUS_ADDR as 0 to mean "this
+    // camera has no such node".  Test the value; address 0 is mapped on
+    // DIGIC 4/5, so writing there would corrupt the reset vectors.
+    #if HOTPLUG_VIDEO_OUT_STATUS_ADDR
+    *(int*)HOTPLUG_VIDEO_OUT_STATUS_ADDR = audio_monitoring ? 2 : 0;
     #endif
-        *(int*)HOTPLUG_VIDEO_OUT_STATUS_ADDR = audio_monitoring ? 2 : 0;
         
     if (audio_monitoring && rca_monitor)
     {

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
+r"""
 Set Canon boot flags (EOS_DEVELOP, BOOTDISK, SCRIPT) on SD card — Windows version.
 
 Works on Windows via `\\.\D:` physical volume access.
@@ -37,6 +37,8 @@ def detect_fs(data):
     """Detect FAT type from boot sector bytes."""
     if data[54:62] == b'FAT16   ':
         return 'FAT16'
+    if data[54:62] == b'FAT12   ':
+        return 'FAT12'
     if data[82:90] == b'FAT32   ':
         return 'FAT32'
     if data[3:11] == b'EXFAT   ':
@@ -53,37 +55,93 @@ def open_volume(path):
     else:
         return open(path, 'r+b')
 
-def set_flags(fh, offsets, args):
-    """Write boot flags at the specified offsets."""
-    fh.seek(0)
-    data = bytearray(fh.read(512))
-
+def apply_flags(data, base, offsets, args):
+    """Write boot flags into `data` at `base + offset`."""
     if args.eos_develop:
-        off = offsets['eos_develop']
+        off = base + offsets['eos_develop']
         data[off:off+11] = b'EOS_DEVELOP'
         print(f'  Wrote EOS_DEVELOP at offset {off}')
 
     if args.bootdisk:
-        off = offsets['bootdisk']
+        off = base + offsets['bootdisk']
         data[off:off+8] = b'BOOTDISK'
         print(f'  Wrote BOOTDISK at offset {off}')
 
     if args.script and 'script' in offsets and offsets['script']:
-        off = offsets['script']
+        off = base + offsets['script']
         data[off:off+6] = b'SCRIPT'
         print(f'  Wrote SCRIPT at offset {off}')
 
     # Remove flags if --remove-unused-flags is set
     if args.remove_unused_flags:
         if offsets.get('eos_develop') and not args.eos_develop:
-            data[offsets['eos_develop']:offsets['eos_develop']+11] = b'\0' * 11
+            data[base+offsets['eos_develop']:base+offsets['eos_develop']+11] = b'\0' * 11
         if offsets.get('bootdisk') and not args.bootdisk:
-            data[offsets['bootdisk']:offsets['bootdisk']+8] = b'\0' * 8
+            data[base+offsets['bootdisk']:base+offsets['bootdisk']+8] = b'\0' * 8
         if offsets.get('script') and not args.script:
-            data[offsets['script']:offsets['script']+6] = b'\0' * 6
+            data[base+offsets['script']:base+offsets['script']+6] = b'\0' * 6
 
+def write_fat_flags(fh, offsets, args):
+    """FAT12/16/32: the flags live in the single boot sector."""
+    fh.seek(0)
+    data = bytearray(fh.read(512))
+    apply_flags(data, 0, offsets, args)
     fh.seek(0)
     fh.write(data)
+    fh.flush()
+
+
+# exFAT keeps the flags in a checksummed 11-sector "main boot region", mirrored
+# to a backup region starting at sector 12.  Writing only the first 512 bytes
+# (as this script used to) leaves both the checksum and the backup copy invalid,
+# so the camera ignores the result.
+EXFAT_VBR_SECTORS = 11
+
+
+def exfat_vbr_checksum(vbr):
+    """exFAT main/backup boot region checksum.
+
+    Volumes 0..10 (5632 bytes), skipping the VolumeFlags (bytes 106-107) and
+    PercentInUse (byte 112) fields.  The rotate-add must be parenthesised before
+    the addition -- ((c << 31) | (c >> 1)) + byte, not (c << 31) | ((c >> 1) + byte).
+    """
+    checksum = 0
+    for index in range(0, 512 * EXFAT_VBR_SECTORS):
+        if index in (106, 107, 112):
+            continue
+        checksum = (((checksum << 31) | (checksum >> 1)) + vbr[index]) & 0xFFFFFFFF
+    return checksum
+
+
+def write_exfat_flags(fh, args):
+    """exFAT: patch main and backup boot regions and refresh both checksums."""
+    region = 512 * EXFAT_VBR_SECTORS
+    offsets = {'eos_develop': 130, 'bootdisk': 122, 'script': None}
+
+    fh.seek(0)
+    main = bytearray(fh.read(region))
+    if len(main) != region:
+        raise IOError('short read of exFAT main boot region')
+
+    apply_flags(main, 0, offsets, args)
+    fh.seek(0)
+    fh.write(main)
+    csum = struct.pack('<I', exfat_vbr_checksum(main)) * 128  # 512-byte sector of repeats
+    fh.seek(region)
+    fh.write(csum)
+
+    fh.seek(512 * 12)
+    backup = bytearray(fh.read(region))
+    if len(backup) == region:
+        apply_flags(backup, 0, offsets, args)
+        fh.seek(512 * 12)
+        fh.write(backup)
+        fh.seek(512 * 12 + region)
+        fh.write(struct.pack('<I', exfat_vbr_checksum(backup)) * 128)
+    else:
+        print('  WARNING: no backup boot region found; only the main region was updated',
+              file=sys.stderr)
+
     fh.flush()
 
 def main():
@@ -138,14 +196,26 @@ def main():
         if args.script:
             print('Skipping SCRIPT flag (EXFAT limitation)', file=sys.stderr)
             args.script = False
-        offsets = {'eos_develop': 130, 'bootdisk': 122, 'script': None}
+        try:
+            write_exfat_flags(fh, args)
+        except IOError as e:
+            print(f'ERROR: {e}', file=sys.stderr)
+            fh.close()
+            sys.exit(1)
+        fh.close()
+        print(f'\nFlags set successfully on {args.volume}!')
+        print('Safe to eject the SD card.')
+        return
+    elif fstype == 'FAT12':
+        print(f'Detected FAT12 on {args.volume} (using FAT16 offsets)')
+        offsets = {'eos_develop': FAT16_EOS_DEVELOP, 'bootdisk': FAT16_BOOTDISK, 'script': FAT16_SCRIPT}
     else:
         print(f'ERROR: {args.volume} is not FAT16, FAT32, or EXFAT.', file=sys.stderr)
         print('Format your SD card in-camera first, then try again.', file=sys.stderr)
         fh.close()
         sys.exit(1)
 
-    set_flags(fh, offsets, args)
+    write_fat_flags(fh, offsets, args)
     fh.close()
 
     print(f'\nFlags set successfully on {args.volume}!')

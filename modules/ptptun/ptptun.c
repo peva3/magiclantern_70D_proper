@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <property.h>
+#include <mem.h>
+#include <config.h>
 #include "ptptun.h"
 
 #define PTP_RC_OK               0x2001
@@ -31,8 +33,30 @@ struct ptp_context {
 };
 
 extern uint32_t ptp_register_handler(uint32_t id, void *handler, void *priv);
-extern uint32_t shamem_read(uint32_t addr);
 extern int take_screenshot(char *filename, uint32_t mode);
+
+/* Addresses below 0x80000000 that are safe to dereference from the tunnel.
+ * Anything outside these windows will fault the camera, so reads are refused
+ * rather than blindly dereferenced. */
+static int address_is_readable(uint32_t addr)
+{
+    if (addr >= 0xC0000000u && addr <= 0xDFFFFFFFu) return 1;   /* MMIO / ENGIO */
+    if (addr >= 0x40000000u && addr <= 0x5FFFFFFFu) return 1;   /* RAM          */
+    if (addr >= 0xF0000000u) return 1;                          /* ROM1 / boot  */
+    return 0;
+}
+
+/* ENGIO writes can permanently break sensor/video timing, so they are gated.
+ * The palette registers are always writable (ML itself owns them); anything
+ * else requires the operator to drop ML/SETTINGS/PTP_UNSAFE.WR on the card. */
+#define PALETTE_LO 0xC0F14080u
+#define PALETTE_HI 0xC0F140BCu
+static int unsafe_writes_enabled;
+static int engio_write_allowed(uint32_t addr)
+{
+    if (addr >= PALETTE_LO && addr <= PALETTE_HI) return 1;
+    return unsafe_writes_enabled;
+}
 
 static int send_data(struct ptp_context *ctx, const char *buf, int size)
 {
@@ -73,7 +97,8 @@ static void send_err(struct ptp_context *ctx, uint32_t session, uint32_t transac
 static void handle_CallByName(struct ptp_context *ctx, uint32_t session, uint32_t transaction, uint32_t param2)
 {
     int size = ctx->get_data_size(ctx->handle);
-    if (size < 5) { send_err(ctx, session, transaction); return; }
+    /* smallest valid payload is a 1-char name plus NUL: 2 bytes */
+    if (size < 2) { send_err(ctx, session, transaction); return; }
 
     char *buf = fio_malloc(size + 1);
     if (!buf) { send_err(ctx, session, transaction); return; }
@@ -108,33 +133,34 @@ static void handle_CallByName(struct ptp_context *ctx, uint32_t session, uint32_
     send_ok(ctx, session, transaction, (uint32_t)result, 0);
 }
 
+/* dumpf() always writes log0000.log (see src/debug.c). Remove any leftover
+ * copy first, so the file read back afterwards is guaranteed to come from
+ * this call rather than from an earlier session. The log is left on the card
+ * (it gets overwritten by the next capture) - deleting it here used to destroy
+ * the only debug output the user had. */
+#define CONSOLE_LOG_PATH "log0000.log"
+
 static void handle_ConsoleCapture(struct ptp_context *ctx, uint32_t session, uint32_t transaction)
 {
+    FIO_RemoveFile(CONSOLE_LOG_PATH);
     int dump_ret = call("dumpf");
     if (dump_ret < 0) { send_err(ctx, session, transaction); return; }
     msleep(500);
 
-    char path[64];
-    int found = 0;
-    for (int i = 0; i < 10; i++) {
-        snprintf(path, sizeof(path), "log%04d.log", i);
-        uint32_t sz = 0;
-        if (FIO_GetFileSize(path, &sz) == 0 && sz > 0) { found = 1; break; }
-    }
-    if (!found) { send_err(ctx, session, transaction); return; }
-
+    const char *path = CONSOLE_LOG_PATH;
     uint32_t sz = 0;
-    FIO_GetFileSize(path, &sz);
+    if (FIO_GetFileSize((char *)path, &sz) != 0 || sz == 0) {
+        send_err(ctx, session, transaction); return;
+    }
     if (sz > 128 * 1024) sz = 128 * 1024;
 
-    FILE *f = FIO_OpenFile(path, 0);
+    FILE *f = FIO_OpenFile((char *)path, 0);
     if (!f) { send_err(ctx, session, transaction); return; }
 
     char *data = fio_malloc(sz);
     if (!data) { FIO_CloseFile(f); send_err(ctx, session, transaction); return; }
     int nread = FIO_ReadFile(f, data, sz);
     FIO_CloseFile(f);
-    FIO_RemoveFile(path);
 
     if (nread <= 0) { fio_free(data); send_err(ctx, session, transaction); return; }
     send_data(ctx, data, nread);
@@ -185,8 +211,12 @@ static void handle_ExecuteLua(struct ptp_context *ctx, uint32_t session, uint32_
     if (!recv_data(ctx, script, size)) { fio_free(script); send_err(ctx, session, transaction); return; }
     script[size] = 0;
 
+    /* This only UPLOADS the script. Nothing auto-runs it: ML's lua module
+     * loads ML/SCRIPTS/<name>.lua solely at startup, and only for files that carry
+     * its AUTORUN flag. The file name is deliberately not CHDK_RUN.LUA, which
+     * belongs to the CHDK PTP ExecuteScript path (src/ptp-chdk.c). */
     char path[64];
-    snprintf(path, sizeof(path), "ML/SCRIPTS/PTP_RUN.LUA");
+    snprintf(path, sizeof(path), "ML/SCRIPTS/TUNNEL.LUA");
     FIO_RemoveFile(path);
 
     FILE *f = FIO_CreateFile(path);
@@ -201,33 +231,46 @@ static void handle_ExecuteLua(struct ptp_context *ctx, uint32_t session, uint32_
 
 static void handle_EngioRead(struct ptp_context *ctx, uint32_t session, uint32_t transaction, uint32_t param2)
 {
-    uint32_t val = shamem_read(param2);
+    /* shamem_read() only understands the ENGIO window; feeding it a RAM
+     * address indexes out of range inside Canon's accessor. MEMX() routes
+     * 0xCxxxxxxx to shamem_read and everything else to a plain load. */
+    if (!address_is_readable(param2)) { send_err(ctx, session, transaction); return; }
+    uint32_t val = MEMX(param2);
     send_ok(ctx, session, transaction, val, 0);
 }
 
 static void handle_EngioWrite(struct ptp_context *ctx, uint32_t session, uint32_t transaction, uint32_t param2, uint32_t param3)
 {
+    if (!engio_write_allowed(param2)) { send_err(ctx, session, transaction); return; }
     EngDrvOut(param2, param3);
     send_ok(ctx, session, transaction, 0, 0);
 }
 
 static void handle_ShamemRead(struct ptp_context *ctx, uint32_t session, uint32_t transaction, uint32_t param2)
 {
-    uint32_t val = shamem_read(param2);
+    /* Kept for backwards compatibility with the original host tool, which
+     * used this as a generic memory read. It never was shamem-specific. */
+    if (!address_is_readable(param2)) { send_err(ctx, session, transaction); return; }
+    uint32_t val = MEMX(param2);
     send_ok(ctx, session, transaction, val, 0);
 }
 
 static void handle_SetPropertyRaw(struct ptp_context *ctx, uint32_t session, uint32_t transaction, uint32_t param2)
 {
     int size = ctx->get_data_size(ctx->handle);
-    if (size < 1) { send_err(ctx, session, transaction); return; }
+    /* The length must match the property's real length exactly - Canon copies
+     * that many bytes out of our buffer regardless of what we allocated. */
+    if (size < 1 || size > 4096) { send_err(ctx, session, transaction); return; }
 
     char *data = fio_malloc(size);
     if (!data) { send_err(ctx, session, transaction); return; }
     if (!recv_data(ctx, data, size)) { fio_free(data); send_err(ctx, session, transaction); return; }
 
-    prop_request_change(param2, data, size);
+    /* prop_request_change() is fire-and-forget and returns void; the _wait
+     * variant tells us whether the property was actually accepted. */
+    int r = prop_request_change_wait(param2, data, size, 1000);
     fio_free(data);
+    if (r != 0) { send_err(ctx, session, transaction); return; }
     send_ok(ctx, session, transaction, 0, 0);
 }
 
@@ -284,34 +327,46 @@ static void run_self_test(void *unused)
 
     int pass = 0, fail = 0, total = 0;
 
-    total++;
-    printf("[TEST %d] PTP handler registered... ", total);
-    {
-        uint32_t r = ptp_register_handler(PTP_TUNNEL_CODE, (void *)(unsigned long)ptp_tunnel_handler, NULL);
-        if (r == 0) { printf("OK\n"); pass++; }
-        else { printf("FAIL (r=0x%08X)\n", r); fail++; }
-    }
+    /* NOTE: the handler is registered once, in init_safe(). Re-registering the
+     * same opcode here used to make this test fail unconditionally. */
 
     total++;
-    printf("[TEST %d] shamem_read(FPS_TIMER_A 0xC0F06008)... ", total);
+    printf("[TEST %d] MEMX(FPS_TIMER_A 0xC0F06008)... ", total);
     {
-        uint32_t v = shamem_read(0xC0F06008);
+        uint32_t v = MEMX(0xC0F06008);
         if (v != 0 && v != 0xFFFFFFFF) { printf("OK (0x%08X)\n", v); pass++; }
         else { printf("FAIL (0x%08X)\n", v); fail++; }
     }
 
     total++;
-    printf("[TEST %d] shamem_read(FPS_TIMER_B 0xC0F06014)... ", total);
+    printf("[TEST %d] MEMX(FPS_TIMER_B 0xC0F06014)... ", total);
     {
-        uint32_t v = shamem_read(0xC0F06014);
-        printf("0x%08X\n", v); pass++;
+        uint32_t v = MEMX(0xC0F06014);
+        if (v != 0 && v != 0xFFFFFFFF) { printf("OK (0x%08X)\n", v); pass++; }
+        else { printf("FAIL (0x%08X)\n", v); fail++; }
     }
 
     total++;
-    printf("[TEST %d] shamem_read(ENGIO 0xC0F06800)... ", total);
+    printf("[TEST %d] MEMX(ENGIO 0xC0F06800)... ", total);
     {
-        uint32_t v = shamem_read(0xC0F06800);
-        printf("0x%08X\n", v); pass++;
+        uint32_t v = MEMX(0xC0F06800);
+        if (v != 0 && v != 0xFFFFFFFF) { printf("OK (0x%08X)\n", v); pass++; }
+        else { printf("FAIL (0x%08X)\n", v); fail++; }
+    }
+
+    total++;
+    printf("[TEST %d] MEMX(RAM ISO table 0x404E5664)... ", total);
+    {
+        uint32_t v = MEMX(0x404E5664);
+        if (v != 0 && v != 0xFFFFFFFF && v != 0xAAAAAAAA) { printf("OK (0x%08X)\n", v); pass++; }
+        else { printf("FAIL (0x%08X)\n", v); fail++; }
+    }
+
+    total++;
+    printf("[TEST %d] address guard rejects 0x00000000... ", total);
+    {
+        if (!address_is_readable(0x00000000)) { printf("OK (refused)\n"); pass++; }
+        else { printf("FAIL (guard let it through)\n"); fail++; }
     }
 
     total++;
@@ -352,29 +407,26 @@ static void run_self_test(void *unused)
     total++;
     printf("[TEST %d] call('dumpf') console capture... ", total);
     {
+        FIO_RemoveFile(CONSOLE_LOG_PATH);
         int r = call("dumpf");
-        if (r >= 0 || r == -1) {
+        if (r >= 0) {
+            uint32_t sz = 0;
             msleep(500);
-            int found = 0;
-            for (int i = 0; i < 3; i++) {
-                char logpath[64];
-                snprintf(logpath, sizeof(logpath), "log%04d.log", i);
-                uint32_t sz = 0;
-                if (FIO_GetFileSize(logpath, &sz) == 0 && sz > 0) {
-                    printf("OK (%s, %d bytes)\n", logpath, sz);
-                    FIO_RemoveFile(logpath);
-                    found = 1; break;
-                }
+            if (FIO_GetFileSize(CONSOLE_LOG_PATH, &sz) == 0 && sz > 0) {
+                printf("OK (%s, %d bytes)\n", CONSOLE_LOG_PATH, sz); pass++;
+            } else {
+                printf("FAIL (dumpf returned %d but no %s)\n", r, CONSOLE_LOG_PATH); fail++;
             }
-            if (!found) { printf("PARTIAL (dumpf ok, no log file)\n"); pass++; }
         } else { printf("FAIL (r=%d)\n", r); fail++; }
     }
 
     total++;
-    printf("[TEST %d] EngDrvOut (read-only test)... ", total);
+    printf("[TEST %d] EngDrvOut allow-list... ", total);
     {
-        uint32_t before = shamem_read(0xC0F06000);
-        printf("OK (CFG=0x%08X)\n", before); pass++;
+        int pal_ok   = engio_write_allowed(0xC0F14080);
+        int fps_deny = !engio_write_allowed(0xC0F06000);
+        if (pal_ok && fps_deny) { printf("OK (palette allowed, FPS denied)\n"); pass++; }
+        else { printf("FAIL (pal=%d fps_deny=%d)\n", pal_ok, fps_deny); fail++; }
     }
 
     printf("========================================\n");
@@ -385,6 +437,9 @@ static void run_self_test(void *unused)
 static void init_safe(void *unused)
 {
     (void)unused;
+    unsafe_writes_enabled = config_flag_file_setting_load("ML/SETTINGS/PTP_UNSAFE.WR");
+    printf("[PTP] ENGIO writes beyond the palette: %s\n",
+        unsafe_writes_enabled ? "ENABLED (PTP_UNSAFE.WR present)" : "blocked (drop ML/SETTINGS/PTP_UNSAFE.WR to allow)");
     printf("[PTP] Registering tunnel handler (opcode 0x%04X)\n", PTP_TUNNEL_CODE);
     unsigned long ptr = (unsigned long)ptp_tunnel_handler;
     uint32_t r = ptp_register_handler(PTP_TUNNEL_CODE, (void *)ptr, NULL);
@@ -399,7 +454,7 @@ static void init_safe(void *unused)
 static unsigned int ptp_tunnel_init(void)
 {
     printf("[PTP] Module loaded, creating init task\n");
-    task_create("ptp_init", 0x1e, 0x1000, init_safe, 0);
+    task_create("ptp_init", 0x1e, 0x2000, init_safe, 0);
     return 0;
 }
 

@@ -375,9 +375,11 @@
 #endif
 
 // verified with prop spy (shared between 70D and 6D)
+// PROP_HTP is NOT repeated here: it is already defined for every camera above.
+// PROP_MULTIPLE_EXPOSURE and PROP_MLU do have to stay, they are only defined
+// for CONFIG_5D3 further up.
 #if defined(CONFIG_70D) || defined(CONFIG_6D)
 #define PROP_HI_ISO_NR 0x80000049
-#define PROP_HTP 0x8000004a
 #define PROP_MULTIPLE_EXPOSURE 0x0202000c
 #define PROP_MULTIPLE_EXPOSURE_SETTING 0x8000003F
 #define PROP_MLU 0x80000047

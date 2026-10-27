@@ -187,10 +187,19 @@ static void fail()
     print_line(COLOR_WHITE_DD, 2, "");
     print_line(COLOR_WHITE_DD, 2, "");
   #ifdef CONFIG_70D
-    char* camera_model_line =  "Please try installing ML for 70D " STR(CONFIG_FW_VERSION) ".";
-    camera_model_line[36] = (camera_model_line[36] == 'A') ? 'B' : 'A';
+    /* The 70D keeps two firmware slots and the installer runs from whichever
+     * one is active.  The old code patched character 36 of a string literal,
+     * which is the trailing '.' rather than a slot letter (the literal is
+     * "Please try installing ML for 70D 112."), so it always produced
+     * "... 112A" and destroyed the full stop - and writing to .rodata through
+     * a char* is undefined behaviour that only works because magiclantern.bin
+     * is relocated into RAM.  Build the line instead of mutating it. */
+    char camera_model_line[64];
+    snprintf(camera_model_line, sizeof(camera_model_line),
+             "Please try installing ML for 70D %s (slot A or B).",
+             STR(CONFIG_FW_VERSION));
     print_line(COLOR_WHITE_DD, 2, camera_model_line);
-    print_line(COLOR_WHITE_DD, 2, "");
+    print_line(COLOR_WHITE_DD, 2, "The installer may have used the other slot.");
   #else
     print_line(COLOR_WHITE_DD, 2, "Please reinstall Canon firmware " STR(CONFIG_FW_VERSION) ",");
     print_line(COLOR_WHITE_DD, 2, "even if you already have this version.");

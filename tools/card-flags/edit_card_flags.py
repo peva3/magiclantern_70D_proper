@@ -99,7 +99,7 @@ def setboot(dev, base, offsets, args):
         dev[off:off+6] = b'SCRIPT'
 
     if not offsets.script and args.script:
-       print("  Selected FS doesn't support SCRIPT flag, ommiting!")
+       print("  Selected FS doesn't support SCRIPT flag, omitting!")
 
 
     if args.remove_unused_flags:
@@ -129,7 +129,11 @@ def setExfat(device, base, args):
         if index in {106, 107, 112}:
             continue
         value = device[base+index] & 0xFF
-        checksum = ((checksum << 31) | (checksum >> 1) + value) & 0xFFFFFFFF
+        # The rotate must be parenthesised before the addition.  Written as
+        #   ((c << 31) | (c >> 1) + value)
+        # Python binds '+' tighter than '|', so a carry out of bit 31 is
+        # silently dropped -- wrong, but only for ~1 in 2^25 inputs.
+        checksum = (((checksum << 31) | (checksum >> 1)) + value) & 0xFFFFFFFF
 
     checksum_chunk = struct.pack('<I', checksum) * 128
     device[base+512*11:base+512*12] = checksum_chunk
@@ -160,10 +164,21 @@ def main():
         args.bootdisk = True
         args.script = True
 
-    device_fd = open(args.partition, 'r+b')
-    # Only map the longest boot recod we need to write to (512*24 is
-    # needed for exfat)
-    device = mmap.mmap(device_fd.fileno(), 512*24)
+    try:
+        device_fd = open(args.partition, 'r+b')
+    except OSError as e:
+        print(f"Error: cannot open {args.partition}: {e}", file=sys.stderr)
+        sys.exit(1)
+    # Only map the longest boot record we need to write to (512*24 is needed
+    # for exfat). mmap raises ValueError on devices/partitions smaller than this,
+    # so fall back to the largest mapping that fits.
+    try:
+        device = mmap.mmap(device_fd.fileno(), 512*24)
+    except (ValueError, OSError) as e:
+        device_fd.close()
+        print(f"Error: {args.partition} is too small to hold a boot record: {e}",
+              file=sys.stderr)
+        sys.exit(1)
 
     if device[54:62] == b'FAT16   ':
         print('Identified FAT16 partition')
@@ -177,12 +192,16 @@ def main():
         # backup VBR, set that one up as well
         setExfat(device, 512*12, args)
     else:
+        device.close()
+        device_fd.close()
         print(f"""\
 Device {args.partition} is not a valid filesystem in the supported range.
 Supported filesystems are FAT16, FAT32, EXFAT.
 Format your card in camera before using this script.""", file=sys.stderr)
+        sys.exit(1)
 
     device.flush()
+    device.close()
     device_fd.close()
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 /**
- * Camera internals for 70D 1.1.1A
+ * Camera internals for 70D 1.1.2
  */
 
 /** Properties are persistent (saved in NVRAM) => a mistake can cause permanent damage. Undefine this for new ports. */
@@ -56,7 +56,14 @@
 /** Bulb mode is done by going to M mode and setting shutter speed beyond 30s **/
 #define CONFIG_SEPARATE_BULB_MODE
 
-/** We can't control audio settings from ML, YET! ASIF init can corrupt LV on 70D **/
+/* Audio controls: DISABLED - this is the authoritative state.
+ * The codec init sequence (ASIF DMA + AK4646 register writes) corrupts
+ * LiveView on this body, so the feature has never been shipped enabled.
+ * Notes elsewhere claiming it was enabled on 2026-05-05 are stale: the line
+ * has been commented out since the initial port (913bed6f74).
+ * Practical consequences: no analog/digital gain, no AGC toggle, no wind
+ * filter, no input-source menu, no headphone monitoring, no 96 kHz.
+ * FEATURE_AUDIO_REMOTE_SHOT is also unavailable (see features.h). */
 //~ #define CONFIG_AUDIO_CONTROLS
 
 /** Zoom button can't be used while recording (for Magic Zoom) **/
@@ -161,3 +168,11 @@
 
 #define CONFIG_TASK_STRUCT_V2
 #define CONFIG_TASK_ATTR_STRUCT_V2
+
+/* CONFIG_ZOOM_X1 is deliberately NOT defined here.
+ * Every other DIGIC V port (650D/700D/100D/6D/700D/EOSM) defines it and
+ * src/shoot.c has five #ifdef CONFIG_ZOOM_X1 blocks (raw resolution and
+ * crop detection when x1 digital zoom is engaged).  The 70D port never had
+ * it, so those paths are compiled out.  Enabling it changes what ML reports
+ * for the raw buffer size in movie mode, which has NOT been verified on
+ * hardware for this body - do that before adding the define. */

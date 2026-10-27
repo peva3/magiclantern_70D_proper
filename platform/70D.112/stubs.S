@@ -84,7 +84,7 @@ NSTUB(0xFF1195C4,  SoundDevShutDownIn)
 /** Audio **/
 NSTUB(   0x7B1F8,  sounddev)
 NSTUB(0xFF13F208, _audio_ic_read)
-NSTUB(0XFF13ED44, _audio_ic_write)
+NSTUB(0xFF13ED44, _audio_ic_write)
 NSTUB(0xFFA1844C,  audio_thresholds)
 NSTUB(0xFF118F5C,  sounddev_task)
 
@@ -132,8 +132,9 @@ NSTUB(0xFF7523B4, LiveViewWifiApp_handler)
 /*   socket_bind:     0x00059E94  (3 callers)                                            */
 /*   socket_connect:  0x00059DDC  (8 callers)                                            */
 /*   socket_listen:   0x0005A9D0  (9 callers, args: fd, backlog)                         */
-/*   socket_accept:   0x00059CE8  (13 callers - may be recvvar)                          */
 /*   socket_recv:     0x00059CE8  (13 callers)                                           */
+/*   socket_accept:   UNKNOWN - no address found.  Use ptpip_sock_accept (0xFF7AF160)   */
+/*                    instead; do NOT reuse 0x00059CE8, that is recv.                   */
 /*   socket_send:     0x0005A09C  (30 callers)                                           */
 /*   socket_setsockopt: 0x0005A810 (47 callers - most widely used)                       */
 /*   socket_close:    0xFF14F74C  (3 callers - CONFIRMED in ROM1!)                       */

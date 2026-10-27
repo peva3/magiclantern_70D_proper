@@ -9,7 +9,6 @@ Usage:
   ./camtunnel.py                      Interactive shell
   ./camtunnel.py --exec script.cam    Run script
   ./camtunnel.py call func_name       Call firmware function by name
-  ./camtunnel.py propget <prop_id>    Get property
   ./camtunnel.py propset <prop_id> <val>  Set property
   ./camtunnel.py screenshot           Capture LCD
   ./camtunnel.py lua "print('hi')"    Execute Lua script
@@ -62,6 +61,16 @@ PTP_TUNNEL_SetPropertyRaw = 7
 
 BUF_SIZE = 128 * 1024
 
+# PTP/USB container types (byte 4..5 of every container header).
+PTP_CONTAINER_OPERATION = 1
+PTP_CONTAINER_DATA      = 2
+PTP_CONTAINER_RESPONSE  = 3
+PTP_CONTAINER_EVENT     = 4
+
+# Every container header is: Length(u32) Type(u16) Code(u16) TransactionID(u32)
+PTP_CONTAINER_HEADER = 12
+PTP_HEADER_FMT = '<IHHI'
+
 class PTPError(Exception):
     pass
 
@@ -85,12 +94,19 @@ class PTPSession:
     def connect(self):
         if self.dev is None:
             self.find_camera()
-        if self.dev.is_kernel_driver_active(0):
-            try:
+        try:
+            if self.dev.is_kernel_driver_active(0):
                 self.dev.detach_kernel_driver(0)
-            except usb.core.USBError:
-                pass
-        cfg = self.dev.get_active_configuration()
+        except (usb.core.USBError, NotImplementedError):
+            # NotImplementedError: backend does not support kernel driver queries
+            pass
+        try:
+            cfg = self.dev.get_active_configuration()
+        except usb.core.USBError:
+            # No configuration selected yet (common when the camera just
+            # enumerated). Set one explicitly and retry.
+            self.dev.set_configuration()
+            cfg = self.dev.get_active_configuration()
         for intf in cfg:
             if intf.bInterfaceClass == 6:
                 self.intf = intf
@@ -110,39 +126,69 @@ class PTPSession:
         tid = self.transaction
         self.transaction += 1
         n = len(params)
-        data = struct.pack('<HHII', 12 + n * 4, 1, opcode, tid)
+        # Length is 32-bit, Type 16-bit, Code 16-bit, TransactionID 32-bit.
+        data = struct.pack(PTP_HEADER_FMT, PTP_CONTAINER_HEADER + n * 4,
+                           PTP_CONTAINER_OPERATION, opcode, tid)
         for p in params:
             data += struct.pack('<I', p)
-        data += struct.pack('<I', 0) * (5 - n)
         self.dev.write(self.ep_out, data, self.timeout)
 
     def send_data(self, data_block):
         self.dev.write(self.ep_out, data_block, self.timeout)
 
+    def _read_exact(self, size):
+        """Read exactly `size` bytes from the IN endpoint."""
+        out = b''
+        while len(out) < size:
+            chunk = bytes(self.dev.read(self.ep_in, min(BUF_SIZE, size - len(out)),
+                                        self.timeout))
+            if not chunk:
+                raise PTPError(f"short read: wanted {size}, got {len(out)}")
+            out += chunk
+        return out
+
+    def _read_container(self):
+        """Read one complete container: (length, type, code, tid, payload)."""
+        header = self._read_exact(PTP_CONTAINER_HEADER)
+        length, ctype, code, tid = struct.unpack_from(PTP_HEADER_FMT, header, 0)
+        if length < PTP_CONTAINER_HEADER or length > 64 * 1024 * 1024:
+            raise PTPError(f"bogus container length {length}")
+        payload = self._read_exact(length - PTP_CONTAINER_HEADER) if length > PTP_CONTAINER_HEADER else b''
+        return length, ctype, code, tid, payload
+
     def recv_data(self, size=None):
-        if size is None:
-            header = self.dev.read(self.ep_in, 512, self.timeout)
-            plen = struct.unpack_from('<I', header, 0)[0]
-            if len(header) < plen:
-                rest = self.dev.read(self.ep_in, plen - len(header), self.timeout)
-                header = bytes(header) + bytes(rest)
-            return header
-        data = b''
-        while len(data) < size:
-            chunk = self.dev.read(self.ep_in, min(BUF_SIZE, size - len(data)), self.timeout)
-            data += bytes(chunk)
-        return data
+        """Receive the data phase and return only its payload.
+
+        The 12-byte data-container header is stripped here, so callers get the
+        bytes the camera actually meant to send (BMP, log text, memory dump, ...).
+        """
+        if size is not None:
+            return self._read_exact(size)
+        length, ctype, code, tid, payload = self._read_container()
+        if ctype == PTP_CONTAINER_EVENT:
+            # Skip an interleaved event, then take the real data container.
+            return self.recv_data(size)
+        if ctype != PTP_CONTAINER_DATA:
+            raise PTPError(f"expected data container, got type {ctype}")
+        return payload
 
     def recv_response(self):
-        resp = self.dev.read(self.ep_in, 512, self.timeout)
-        plen, rtype, cmd, tid, rc = struct.unpack_from('<HHI<I', bytes(resp), 0)
-        nparams = (plen - 12) // 4
-        params = []
-        off = 12
-        for i in range(nparams):
-            params.append(struct.unpack_from('<I', bytes(resp), off)[0])
-            off += 4
-        return rc, params
+        """Receive the operation response, skipping interleaved event containers.
+
+        The 70D PTP stack emits asynchronous events (DeviceBusy, property
+        changed, ...) on the same IN endpoint as responses. Consuming an event as
+        if it were the response desynchronises the whole session, so events are
+        filtered out here.
+        """
+        while True:
+            length, ctype, code, tid, payload = self._read_container()
+            if ctype == PTP_CONTAINER_EVENT:
+                continue
+            if ctype != PTP_CONTAINER_RESPONSE:
+                raise PTPError(f"expected response container, got type {ctype}")
+            nparams = len(payload) // 4
+            params = [struct.unpack_from('<I', payload, i * 4)[0] for i in range(nparams)]
+            return code, params
 
     def wait_for_interrupt(self):
         try:
@@ -211,22 +257,43 @@ class PTPSession:
         if rc != PTP_RC_OK:
             raise PTPError(f"DownloadFile failed: rc=0x{rc:04X}")
 
-        hdr_len = struct.unpack_from('<I', data, 0)[0]
+        # recv_data() already stripped the 12-byte container header
         file_len = params[0] if params else len(data)
-        start = 12
-        return data[start:start + file_len]
+        return data[:file_len]
 
-    def tunnel_command(self, subcmd, param2=0, param3=0, data=None):
+    def _tunnel_send(self, subcmd, param2=0, param3=0, data=None):
         self.send_operation(PTP_TUNNEL_CODE, subcmd, param2, param3)
         if data is not None:
             self.send_data(data)
-        time.sleep(0.1)
-        rc, params = self.recv_response()
+        time.sleep(0.05)
+
+    @staticmethod
+    def _check_tunnel_rc(rc, subcmd):
+        # The real error channel is the PTP return code. param[0] carries the
+        # value the firmware returned, and 0xFFFFFFFF is a perfectly legal value
+        # (it is also what most firmware functions return for "not found"), so it
+        # must not be treated as an error sentinel.
         if rc != PTP_RC_OK:
             raise PTPError(f"Tunnel command {subcmd} failed: rc=0x{rc:04X}")
-        if params and params[0] == 0xFFFFFFFF:
-            raise PTPError(f"Tunnel command {subcmd} returned error")
+
+    def tunnel_command(self, subcmd, param2=0, param3=0, data=None):
+        self._tunnel_send(subcmd, param2, param3, data)
+        rc, params = self.recv_response()
+        self._check_tunnel_rc(rc, subcmd)
         return params
+
+    def tunnel_command_with_data(self, subcmd, param2=0, param3=0, data=None):
+        """Tunnel command that also returns a data container.
+
+        The camera transmits the data container BEFORE the response
+        (ptptun.c: send_data() then send_resp()), so the data phase must be
+        consumed first.  Reading the response first yields the wrong bytes.
+        """
+        self._tunnel_send(subcmd, param2, param3, data)
+        payload = self.recv_data()
+        rc, params = self.recv_response()
+        self._check_tunnel_rc(rc, subcmd)
+        return params, payload
 
     def tunnel_call_byname(self, func_name, *args):
         data = func_name.encode('utf-8') + b'\x00'
@@ -236,13 +303,11 @@ class PTPSession:
         return params[0] if params else 0
 
     def tunnel_console_capture(self):
-        params = self.tunnel_command(PTP_TUNNEL_ConsoleCapture, param2=0)
-        data = self.recv_data()
+        params, data = self.tunnel_command_with_data(PTP_TUNNEL_ConsoleCapture, param2=0)
         return data
 
     def tunnel_screenshot(self):
-        params = self.tunnel_command(PTP_TUNNEL_Screenshot)
-        data = self.recv_data()
+        params, data = self.tunnel_command_with_data(PTP_TUNNEL_Screenshot)
         return data
 
     def tunnel_execute_lua(self, script):
@@ -278,7 +343,7 @@ def interactive_shell(sesh):
     banner = """
 === camtunnel - Canon 70D PTP Tunnel ===
 Commands: call, memread, memwrite, engio_read, engio_write, shamem_read,
-           screenshot, console, lua, propget, propset, upload, download, help
+           screenshot, console, lua, propset, upload, download, help
 
 Type any command with args, or 'exit' to quit.
 
@@ -396,11 +461,6 @@ def main():
             sesh.tunnel_execute_lua(script)
             print(f"Lua script saved to ML/SCRIPTS/PTP_RUN.LUA ({len(script)} bytes)")
 
-        elif cmd == 'propget':
-            prop = int(rest[0], 0)
-            sesh.tunnel_command(PTP_TUNNEL_ShamemRead, param2=prop)
-            print(f"prop_get(0x{prop:08X}) - see console output")
-
         elif cmd == 'propset':
             prop = int(rest[0], 0)
             val = int(rest[1], 0)
@@ -428,7 +488,7 @@ def main():
         else:
             print(f"Unknown command: {cmd}")
             print("Commands: call, memread, memwrite, engio_read, engio_write,")
-            print("  shamem_read, screenshot, console, lua, propget, propset,")
+            print("  shamem_read, screenshot, console, lua, propset,")
             print("  upload, download, version")
             return 1
 

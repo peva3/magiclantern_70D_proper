@@ -31,7 +31,7 @@ BUILD=1
 BOOT_MODE=0
 D_ARGS=()
 SERIAL_FILE=""
-DISPLAY_OPT=""
+DISPLAY_OPT=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -45,7 +45,8 @@ while [[ $# -gt 0 ]]; do
         --calls) D_ARGS+=("calls"); shift ;;
         --boot) BOOT_MODE=1; TIMEOUT=180; shift ;;  # Extended timeout for module loading
         --no-build) BUILD=0; shift ;;
-        --display) DISPLAY_OPT=""; shift ;;
+        --display) DISPLAY_OPT=1; shift ;;
+        --headless) DISPLAY_OPT=0; shift ;;
         --timeout) TIMEOUT="$2"; shift; shift ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -56,18 +57,31 @@ mkdir -p "$LOG_DIR"
 # ── Step 1: Build ML ──────────────────────────────────────────────────────────
 if [[ $BUILD -eq 1 ]]; then
     echo "═══ Building Magic Lantern for 70D... ═══"
-    cd "$ML_DIR"
-    make -C platform/70D.112 -j"$(nproc)" CONFIG_QEMU=y 2>&1 | tail -5
+    BUILD_LOG="$LOG_DIR/build_70d_$(date +%Y%m%d_%H%M%S).log"
+    # Run make directly so its exit status is visible: piping through `tail`
+    # under `set -o pipefail` aborted the script before the message below.
+    if ! make -C "$ML_DIR/platform/70D.112" -j"$(nproc)" CONFIG_QEMU=y > "$BUILD_LOG" 2>&1; then
+        echo "  ✗ Build FAILED — see $BUILD_LOG"
+        tail -20 "$BUILD_LOG"
+        exit 1
+    fi
+    echo "  build log: $BUILD_LOG"
 
     AUTOEXEC="$ML_DIR/platform/70D.112/build/autoexec.bin"
     if [[ -f "$AUTOEXEC" ]]; then
-        SIZE=$(stat --format="%s" "$AUTOEXEC" 2>/dev/null || stat -f "%z" "$AUTOEXEC" 2>/dev/null || echo "?")
-        echo "  autoexec.bin: $(( SIZE / 1024 ))KB ($SIZE bytes)"
-        if [[ $SIZE -gt 614400 ]]; then
-            echo "  ⚠ WARNING: autoexec.bin exceeds 600KB!"
+        SIZE=$(stat --format="%s" "$AUTOEXEC" 2>/dev/null || stat -f "%z" "$AUTOEXEC" 2>/dev/null || echo 0)
+        if [[ "$SIZE" =~ ^[0-9]+$ ]]; then
+            echo "  autoexec.bin: $(( SIZE / 1024 ))KB ($SIZE bytes)"
+            # Real budget: 0x4E0000 - 0x44C100 = 605952 bytes (src/boot-d45-am.c)
+            if [[ $SIZE -gt 605952 ]]; then
+                echo "  ✗ autoexec.bin exceeds the 605952 byte budget!"
+                exit 1
+            fi
+        else
+            echo "  autoexec.bin: size unknown"
         fi
     else
-        echo "  ⚠ Build failed — no autoexec.bin"
+        echo "  ✗ Build reported success but produced no autoexec.bin"
         exit 1
     fi
     echo ""
@@ -157,8 +171,12 @@ CMD+=(-drive if=sd,file="$SD_IMG")
 CMD+=(-M "70D,firmware=boot=$BOOT_FLAG")
 CMD+=(-name "70D")
 
-if [[ -n "$DISPLAY_OPT" ]]; then
-    CMD+=($DISPLAY_OPT)
+# Headless by default: without this QEMU falls back to GTK/SDL and dies in a
+# terminal-only session.  --display opts back into a window.
+if [[ "${DISPLAY_OPT:-0}" -eq 1 ]]; then
+    CMD+=(-display gtk)
+else
+    CMD+=(-nographic -display none)
 fi
 
 # Serial output to file + console via tee

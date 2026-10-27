@@ -923,14 +923,6 @@ static struct menu_entry cfg_menus[] = {
 };
 #endif
 
-/* Early initialization of config_dir for module loading */
-void config_init_early(void)
-{
-    /* Initialize config_dir to default before config system is fully loaded */
-    snprintf(config_dir, sizeof(config_dir), "ML/SETTINGS/");
-    printf("[CONFIG] Early init: config_dir='%s'\n", config_dir);
-}
-
 /* called at startup, after init_func's */
 void config_load()
 {

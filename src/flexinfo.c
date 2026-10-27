@@ -29,10 +29,11 @@
 #define DISPLAY_BATTERY_LEVEL_1 60 //%
 #define DISPLAY_BATTERY_LEVEL_2 20 //%
 
-/* copied from lens.c to get crop information */
+/* copied from lens.c to get crop information - keep the camera list in sync
+ * with src/lens.c, which also puts CONFIG_70D in the digital-zoom branch */
 #ifdef CONFIG_FULLFRAME
 #define SENSORCROPFACTOR 10
-#elif defined(CONFIG_600D)
+#elif defined(CONFIG_600D) || defined(CONFIG_70D)
 static PROP_INT(PROP_DIGITAL_ZOOM_RATIO, digital_zoom_ratio);
 #define DIGITAL_ZOOM ((is_movie_mode() && video_mode_crop && video_mode_resolution == 0) ? digital_zoom_ratio : 100)
 #define SENSORCROPFACTOR (16 * DIGITAL_ZOOM / 100)
@@ -412,35 +413,18 @@ info_elem_t info_config_photo[] =
     { .string = { { INFO_TYPE_STRING, { 693, 459, 2, .name = "Copyright", .user_disable = 0, .anchor_flags_self = INFO_ANCHOR_RIGHT }}, INFO_STRING_COPYRIGHT, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM_SHADOW } },
 #endif
 
-#if defined(CONFIG_70D)
-    /* 70D-specific layout: avoids bottom bar area (y=459) to prevent flickering
-     * on vari-angle display. Uses inner screen positions only.
-     * CONFIG_LVAPP_HACK_DEBUGMSG handles Canon bottom bar suppression. */
-
-    /* entry 1, max AUTO ISO */
-    { .string = { { INFO_TYPE_STRING, { MAX_ISO_POS_X, MAX_ISO_POS_Y, 2, .name = "Max ISO Range"  }}, INFO_STRING_ISO_MAX, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM_SHADOW } },
-
-    /* entry 2 and 3, WB strings */
-    { .string = { { INFO_TYPE_STRING, { WBS_GM_POS_X, WBS_GM_POS_Y, 2, .name = "WB GM" }}, INFO_STRING_WBS_GM, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM_SHADOW } },
-    { .string = { { INFO_TYPE_STRING, { WBS_POS_X, WBS_POS_Y, 2, .name = "WB BA" }}, INFO_STRING_WBS_BA, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM_SHADOW } },
-
-    /* entry 4, MLU string */
-    { .string = { { INFO_TYPE_STRING, { MLU_STATUS_POS_X, MLU_STATUS_POS_Y, 2, .name = "MLU" }}, INFO_STRING_MLU, COLOR_FG_NONLV, INFO_COL_FIELD, INFO_FONT_SMALL } },
-
-    /* entry 5, HDR bracketing status */
-    { .string = { { INFO_TYPE_STRING, { HDR_STATUS_POS_X, HDR_STATUS_POS_Y, 2, .name = "HDR" }}, INFO_STRING_HDR, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM_SHADOW } },
-
-    /* Kelvin (bold icon + value) */
-    { .string = { { INFO_TYPE_STRING, { WB_K_ICON_POS_X+10+1, WB_K_ICON_POS_Y, 2, .name = "K ICON1" }}, INFO_STRING_KELVIN_ICO, COLOR_FG_NONLV, INFO_COL_FIELD, INFO_FONT_CANON } },
-    { .string = { { INFO_TYPE_STRING, { WB_K_ICON_POS_X+10-1, WB_K_ICON_POS_Y, 2, .name = "K ICON2" }}, INFO_STRING_KELVIN_ICO, COLOR_FG_NONLV, INFO_COL_FIELD, INFO_FONT_CANON } },
-    { .string = { { INFO_TYPE_STRING, { WB_KELVIN_POS_X,    2+WB_KELVIN_POS_Y, 2, .name = "Kelvin"  }}, INFO_STRING_KELVIN, COLOR_FG_NONLV, INFO_COL_FIELD, INFO_FONT_MEDIUM_SHADOW } },
-
-    /* header - inner screen positions to avoid vari-angle display conflict */
-    { .string = { { INFO_TYPE_STRING, { 28, 2, 2, .name = "Lens", .user_disable = 0 }}, INFO_STRING_LENS, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM } },
-    { .string = { { INFO_TYPE_STRING, { 710, 2, 2, .name = "Date", .user_disable = 0, .anchor_flags_self = INFO_ANCHOR_RIGHT }}, INFO_STRING_CAM_DATE, COLOR_FG_NONLV, INFO_COL_BG, INFO_FONT_MEDIUM } },
-    /* footer - moved up from y=459 to y=440 to avoid vari-angle display flicker zone */
-    { .string = { { INFO_TYPE_STRING, { DISPLAY_CLOCK_POS_X, DISPLAY_CLOCK_POS_Y, 2, .name = "Time" }}, INFO_STRING_TIME, COLOR_FG_NONLV, INFO_COL_PEEK, INFO_FONT_LARGE } },
-#endif
+/* There used to be a second, 70D-only set of layout entries here.  It was dead
+ * code: FEATURE_FLEXINFO is #undef'd for the 70D (platform/70D.112/features.h)
+ * and this whole file is inside #ifdef FEATURE_FLEXINFO, so it never compiled.
+ * Its rationale was also wrong - it claimed CONFIG_LVAPP_HACK_DEBUGMSG would
+ * suppress Canon's bottom bar, but that option is commented out in
+ * platform/70D.112/internals.h, and the "moved up to y=440" footer it defined
+ * was not y=440 at all (DISPLAY_CLOCK_POS_Y is 410 in consts.h).
+ *
+ * The real reason FlexInfo is off on this body is the bottom line (time,
+ * battery) flickering on the vari-angle display.  If it is ever revived, the
+ * layout has to be re-derived on hardware rather than resurrected from here.
+ */
 
     { .type = INFO_TYPE_END },
 };

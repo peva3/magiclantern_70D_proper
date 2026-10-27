@@ -590,6 +590,7 @@ PTP_HANDLER( PTP_OC_CHDK, 0 )
                 }
                 msg.param_count = 1;
                 msg.param[0] = 0;
+                break;
             }
 
         default:

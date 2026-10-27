@@ -906,10 +906,8 @@ int is_continuous_af()
     return is_movie_mode() ? continuous_af_movie : continuous_af_photo;
 }
 
-#ifdef CONFIG_LV_FOCUS_INFO
-#if defined(FEATURE_TRAP_FOCUS) || defined(FEATURE_MAGIC_ZOOM)
+#if defined(CONFIG_LV_FOCUS_INFO) && (defined(FEATURE_TRAP_FOCUS) || defined(FEATURE_MAGIC_ZOOM))
 static int trap_focus_autoscaling = 1;
-#endif
 #endif
 
 #ifdef FEATURE_TRAP_FOCUS
@@ -995,6 +993,10 @@ static void plot_focus_mag()
 #undef FH
 #undef NMAGS
 
+/* The 70D has no PROP_LV_FOCUS_DATA (0x80050026).  Registering a slave for a
+ * property the body never delivers is inert but misleading, so it is compiled
+ * out; focus_pos from PROP_LV_LENS is used instead (see update_focus_pos_70d). */
+#ifndef CONFIG_70D
 static int focus_mag_a = 0;
 static int focus_mag_b = 0;
 static int focus_mag_c = 0;
@@ -1013,6 +1015,7 @@ PROP_HANDLER(PROP_LV_FOCUS_DATA)
     
     update_focus_mag(focus_mag);
 }
+#endif  /* !CONFIG_70D */
 #else
 void plot_focus_mag(){};
 #endif
@@ -1024,6 +1027,7 @@ void plot_focus_mag(){};
 static int focus_pos_history[8] = {0};
 static int focus_pos_idx = 0;
 static int last_focus_pos = 0;
+static int lens_idle_stable_70d = 0;
 
 static void update_focus_pos_70d(void)
 {
@@ -1054,24 +1058,38 @@ static void update_focus_pos_70d(void)
     int stable = (maxv - minv) <= STABLE_THRESHOLD;
     int avg = sum / WINDOW;
 
+    /* IMPORTANT: do NOT call update_focus_mag() from here.
+     *
+     * update_focus_mag() was written for PROP_LV_FOCUS_DATA, where its input
+     * is a focus-QUALITY metric (bigger = sharper) and it ends by setting
+     *     lv_focus_confirmation = (focus_value > 80 && focus_min_value < 60);
+     * Feeding it "how far the lens moved before it stopped" means every lens
+     * move-then-stop is reported as "in focus", no matter what the image
+     * actually looks like.  Trap focus consumes that flag in
+     * src/shoot.c (get_lv_focus_confirmation()) and would fire in the wrong
+     * place.  Position stability is a UI hint only. */
     if (stable)
     {
-        /* Only trigger when the stable position differs meaningfully from last reported */
         int pos_delta = ABS(avg - last_focus_pos);
         if (pos_delta > 0)
         {
-            /* Scale delta to a focus_mag (tunable) */
-            int focus_mag = COERCE(pos_delta * 4, 0, 200);
-            if (focus_mag >= 10) /* threshold to avoid tiny blips */
-                update_focus_mag(focus_mag);
-
+            lens_idle_stable_70d = (pos_delta < 40) ? 1 : 0;
             last_focus_pos = avg;
         }
     }
     else
     {
         /* still moving; don't update last_focus_pos */
+        lens_idle_stable_70d = 0;
     }
+}
+
+/* 1 = the lens has stopped moving for a few samples.  Purely informational:
+ * Magic Zoom / focus helpers may display it, but it must never be turned
+ * into lv_focus_confirmation (see the comment above). */
+int get_lens_idle_stable_70d(void)
+{
+    return lens_idle_stable_70d;
 }
 #endif
 

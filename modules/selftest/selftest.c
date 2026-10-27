@@ -971,7 +971,17 @@ static void stub_test_engio()
 
 static void stub_test_display()
 {
-#ifndef CONFIG_70D
+    /* Runtime check, not #ifdef CONFIG_70D: modules are never compiled with
+     * -DCONFIG_$(MODEL), so a compile-time guard here is always true and the
+     * 70D would run call("TurnOnDisplay") -- which hard-freezes this body. */
+    if (is_camera("70D", "1.1.2"))
+    {
+        // TurnOnDisplay/TurnOffDisplay are unsafe on 70D (hard freeze)
+        // Skip display tests on 70D.  Nothing to report: the test tables
+        // already carry a note for this body.
+        return;
+    }
+
     // call, DISPLAY_IS_ON
     TEST_VOID(call("TurnOnDisplay"));
     TEST_FUNC_CHECK(DISPLAY_IS_ON, != 0);
@@ -979,11 +989,6 @@ static void stub_test_display()
     TEST_FUNC_CHECK(DISPLAY_IS_ON, == 0);
     TEST_VOID(call("TurnOnDisplay"));
     TEST_FUNC_CHECK(DISPLAY_IS_ON, != 0);
-#else
-    // TurnOnDisplay/TurnOffDisplay are unsafe on 70D (hard freeze)
-    // Skip display tests on 70D
-    info();
-#endif
 }
 
 static void stub_test_gui()

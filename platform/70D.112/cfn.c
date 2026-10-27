@@ -8,9 +8,9 @@ GENERIC_GET_HTP
 GENERIC_GET_MLU
 GENERIC_SET_MLU
 
-//PROP_CFN_TAB1/2/3/4
-// POS 8 = 1/2 Shutter
-// 0 - af 1- metering 2 - AeL
+// PROP_CFN_TAB (0x80010007), length 0x1c on this body.
+// Byte 7 holds the AF-button assignment: 0 = AF, 1 = metering, 2 = AeL.
+// (The 6D port uses index 8 with a 0x1d-byte table - do not copy that here.)
 static int8_t some_cfn[0x1c];	// length 0x1c for 70D
 PROP_HANDLER(0x80010007)
 {

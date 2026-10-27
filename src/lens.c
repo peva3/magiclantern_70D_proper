@@ -786,7 +786,12 @@ lens_focus(
     {
         if (lv && !mirror_down)
         {
-            /* Wait for lens to be ready (70D needs this - job_state may lag) */
+#ifdef CONFIG_70D
+            /* The 70D drops a focus command that arrives while the previous one
+             * is still executing, so wait for the lens to report idle first.
+             * This is deliberately 70D-only: on other DIGIC V bodies job_state
+             * can stay non-zero for a long time and the wait would add up to
+             * 2 s per step for nothing. */
             int job_timeout = 100;
             while (lens_info.job_state != 0 && job_timeout > 0)
             {
@@ -796,8 +801,17 @@ lens_focus(
                 job_timeout--;
             }
 
-            if (lens_info.job_state == 0)
+            if (lens_info.job_state != 0)
             {
+                /* Do not send the command into a busy lens, and do report the
+                 * failure: previously this step was skipped silently and the
+                 * function still returned success, so rack focus and focus
+                 * stacking appeared to work while the lens never moved. */
+                lv_focus_error = 1;
+                break;
+            }
+#endif
+
             if (wait)
             {
                 lv_focus_done = 0;
@@ -835,7 +849,7 @@ lens_focus(
                 /* also wait for confirmation from PROP_LV_FOCUS_DONE */
                 lens_focus_wait();
 #endif
-                
+
                 /* also wait a little more if user want so (for really stubborn lenses) */
                 if (extra_delay)
                 {
@@ -848,11 +862,11 @@ lens_focus(
                  * from the last PROP_LV_FOCUS_DONE event
                  * this fixes some crashes that appear to be caused
                  * by filling Canon's focus request queue with our junk
-                 * 
+                 *
                  * (not sure what their buffer size is, but with 5, it crashes)
                  */
                 lv_focus_requests++;
-                
+
                 if (lv_focus_requests < 3)
                 {
                     info_led_on();
@@ -862,7 +876,6 @@ lens_focus(
                 /* open-loop delay, without waiting for confirmation; at least 10ms */
                 msleep(MAX(10, extra_delay));
             }
-        }
         }
     }
 

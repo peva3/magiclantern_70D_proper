@@ -22,23 +22,24 @@ PRINT "Testing firmware calls..."
 call("dumpf")
 
 ' --- Test 2: RAM probe ---
-PRINT "RAM probe at 0x40000000:"
-v0 = MEM(&H40000000)
-PRINT "MEM(0x40000000) = ", v0
-v4 = MEM(&H40000004)
-PRINT "MEM(0x40000004) = ", v4
+PRINT "RAM probe:"
+PRINT MEM(&H40000000)
+PRINT MEM(&H40000004)
 
 ' --- Test 3: attempt file creation via FIO eventprocs ---
-' These may fail if eventprocs require args that CBasic can't pass
-PRINT "Attempting file creation..."
+' These will very likely fail: CBasic can call an eventproc but cannot pass it
+' arguments, so FIO_CreateFile gets a garbage path. Kept as a resolution probe
+' - what matters is whether the name is found at all.
+PRINT "Attempting FIO eventproc resolution..."
 call("FIO_CreateFile")
 call("FIO_RemoveFile")
 
 ' --- Test 4: identify camera ---
-' Try known eventproc names from firmware
-PRINT "Camera identification..."
-call("GetCameraModel")
-call("GetFirmwareVersion")
+' GetCameraModel and GetFirmwareVersion are NOT eventproc names - they do not
+' resolve through call() on this family of bodies, so they were removed rather
+' than left in as guaranteed no-ops. Camera identity comes from the ROM probe
+' above and from the build the script was written for.
+PRINT "Camera identification skipped (no eventproc for it)"
 
 ' --- Script complete ---
 PRINT "=== EXTEND.M DONE ==="

@@ -1,68 +1,63 @@
-' Canon EOS 90D — CBasic Memory Enumeration
-' This version attempts to dump RAM regions to files on the SD card
-' using Canon Basic file I/O functions.
+' Canon EOS 90D - CBasic memory probe
 '
-' WARNING: This is experimental. The Canon Basic syntax on DIGIC 8
-' may differ from CHDK uBasic. Proceed incrementally.
+' WHAT THIS DOES
+'   Reads a handful of 32-bit words and prints them. Nothing is written to the
+'   SD card: Canon Basic on DIGIC 8 gives us MEM() reads and call() by eventproc
+'   name, but there is no CBasic statement that writes a memory range to a file.
+'   (An earlier revision of this script announced an SD dump in its comments and
+'   PRINT lines; it never performed one, because there was no code to do it.)
 '
-' Syntax used:
-'   PRINT "string"          — output to LCD/serial
-'   call("eventproc")       — call firmware eventproc by name
-'   MEM(addr)               — read 32-bit word at address
-'   MEM(addr) = value       — write 32-bit word at address
-'   FIO_CreateFile("path")  — create file on SD card
-'   FIO_WriteFile(fh, addr, len) — write memory to file
-'   FIO_CloseFile(fh)       — close file handle
-'   &HXXXXXXXX               — hex literal
-'   GETTIME                  — system time counter
+' WHERE THE OUTPUT GOES
+'   CBasic PRINT writes to the serial/UART console, NOT the camera LCD. Expect
+'   nothing on screen. Options:
+'     1. Serial cable on the UART pins, 115200 baud
+'     2. Look for a boot delay / LED blink as evidence the script ran
+'     3. Use call("dumpf") and then read the DryOS log from the card
+'
+' DEPLOYMENT
+'   1. Card must be FAT32 - exFAT does not support the SCRIPT flag
+'   2. python3 tools/card-flags/edit_card_flags.py /dev/sdX1 --script --bootdisk --eos-develop
+'   3. Copy as "extend.m" to the CARD ROOT
+'   4. Insert, power on, wait ~10 s, power off, read the log from the card
+'
+' PATHS
+'   Any file path passed to an eventproc needs an explicit drive prefix
+'   ("A:/..."), otherwise it is resolved against whatever the current directory
+'   happens to be at boot.
 
-PRINT "=== Canon EOS 90D — CBasic RAM Probe v2 ==="
-PRINT "Time: ", GETTIME
+PRINT "=== Canon EOS 90D - CBasic probe ==="
+PRINT "Output is on serial, not on the LCD."
 
-' ── Phase 1: Verify execution ──'
-PRINT "Phase 1: Execution verification"
-PRINT "CBasic interpreter active!"
+' --- Phase 1: prove the interpreter is running ---
+PRINT "Phase 1: execution check"
 call("dumpf")
-PRINT "dumpf() called — check serial/monitor output"
+PRINT "dumpf returned - DryOS log should now hold log0000.log"
 
-' ── Phase 2: Probe memory map ──'
-PRINT "Phase 2: RAM address space probe"
+' --- Phase 2: RAM ---
+PRINT "Phase 2: RAM words"
+PRINT MEM(&H40000000)
+PRINT MEM(&H40000004)
+PRINT MEM(&H40000008)
 
-PRINT "Probe 0x40000000: ", MEM(&H40000000)
-PRINT "Probe 0x40000004: ", MEM(&H40000004)
-PRINT "Probe 0xE0000000 (ROM0): ", MEM(&HE0000000)
-PRINT "Probe 0xF0000000 (ROM1): ", MEM(&HF0000000)
-PRINT "Probe 0xE0040000 (entry): ", MEM(&HE0040000)
+' --- Phase 3: ROM ---
+PRINT "Phase 3: ROM words"
+PRINT MEM(&HE0000000)
+PRINT MEM(&HF0000000)
+PRINT MEM(&HE0040000)
 
-' ── Phase 3: Try to read critical addresses ──'
-PRINT "Phase 3: Canon globals"
+' --- Phase 4: low memory / dryos ---
+PRINT "Phase 4: DryOS low words"
+PRINT MEM(&H4000)
+PRINT MEM(&H4008)
 
-' Try known DIGIC 8 locations (may vary on 90D)
-' current_task commonly at low RAM
-PRINT "0x4000 (dryos asserts): ", MEM(&H4000)
-PRINT "0x4008 (SGI handlers): ", MEM(&H4008)
-
-' Camera model detection
-' Look for "90D" string in ROM
-PRINT "0xE0000000 (ROM start): ", MEM(&HE0000000)
-
-' ── Phase 4: Try file I/O for RAM dump ──'
-PRINT "Phase 4: Attempting RAM dump to SD"
-
-' Dump first 64KB of firmware entry point
-' This gives us the SIG_90D_111 value
-PRINT "Creating ML/LOGS/90D_ROM_SIG.BIN..."
-call("FIO_CreateFile", "ML/LOGS/90D_ROM_SIG.BIN")
-
-' Dump a small 1MB region at ROM start
-PRINT "Dumping ROM0 first 1MB..."
-
-' ── Phase 5: Task/eventproc enumeration ──'
-PRINT "Phase 5: Testing known eventprocs"
+' --- Phase 5: probe a few eventproc names ---
+' call() returns a value if the name resolves; the return is what we are
+' actually interested in, not the side effect. These three are documented as
+' present on DIGIC 8 bodies. Add more names here as they are discovered - but
+' do not guess, because a missing name is silently ignored.
+PRINT "Phase 5: eventproc resolution"
 call("dumpf")
-PRINT "dumpf complete"
-PRINT "Note: these may require specific camera state (modes)"
+call("GetBatteryLevel")
 
-PRINT "=== CBasic Probe Complete ==="
-PRINT "If you see this, CBasic works on 90D!"
-PRINT "Copy ML/LOGS/* from SD card to PC for analysis"
+PRINT "=== Probe complete ==="
+PRINT "Power off, then read log0000.log from the card root."

@@ -13,7 +13,6 @@
 #include <exmem.h>
 #include <fio-ml.h>
 #include <config.h>
-#include <dryos.h>
 #include <falsecolor.h>
 #include <lens.h>
 
@@ -32,7 +31,7 @@
  *
  * Sprint mapping:
  *   S2/S1 (Focus):       PROP_LV_LENS dump, lens stub verify
- *   S3 (FPS):            FPS timer register dump, write/read-back test
+ *   S3 (FPS):            FPS timer register dump, stability sampling
  *   S4 (RAW Zebras):     EDMAC/PACK32 register dump
  *   S5 (crop_rec):       CMOS/ENGIO/ADTG register dump, timer tables verify
  *   S6 (Dual ISO):       CMOS ISO register dump, ISO push register
@@ -46,15 +45,14 @@
  * NO call() to known-dangerous functions (EnableBootDisk, TurnOnDisplay).
  */
 
-#ifdef CONFIG_EOSM
-#define VERSION "hw_test v27 (EOSM port) — DIGIC V hardware proving ground"
-#else
-#define VERSION "hw_test v27 — FPS stability, ADTG/SD mode, extended call() tests"
-#endif
+#define VERSION "hw_test v28 - DIGIC V hardware proving ground"
 
 static int t_total, t_pass, t_skip, t_fail, scr_y;
 static FILE *log_fp;
 static int log_write_count;
+static int is_70d;              /* set at runtime: modules are never compiled
+                                 * with -DCONFIG_70D, so compile-time guards
+                                 * for camera identity are always false. */
 static void log_flush(void);
 #define LINE_H 10
 #define X0 20
@@ -71,6 +69,28 @@ static int line(void)
     scr_y += LINE_H;
     if (scr_y > 460) scr_y = LINE_H;
     return y;
+}
+
+/* ────────────────────────────────────────────
+ * CARD PATH HANDLING (S46.16)
+ *
+ * ML normally chdir()s to the card root, so the bare relative form
+ * ("ML/LOGS/...") works. The discovery probe below also accepts the
+ * drive-prefixed forms; if one of those is what actually works we must
+ * use the same prefix for every later path, otherwise the log file is
+ * silently lost while the on-screen summary still reports PASS.
+ * ──────────────────────────────────────────── */
+static char card_root[4] = "";      /* "" or "A:/" or "B:/" */
+
+/* Build a card-relative path with the discovered prefix.
+ * Uses a small ring buffer so several calls can appear in one expression. */
+static const char *card_path(const char *rel)
+{
+    static char ring[3][64];
+    static int slot = 0;
+    slot = (slot + 1) % 3;
+    snprintf(ring[slot], sizeof(ring[slot]), "%s%s", card_root, rel);
+    return ring[slot];
 }
 
 static void log_write(const char *s)
@@ -90,7 +110,13 @@ static void log_flush(void)
 {
     if (log_fp) {
         FIO_CloseFile(log_fp);
-        log_fp = FIO_CreateFileOrAppend("ML/LOGS/HW_TEST.LOG");
+        log_fp = FIO_CreateFileOrAppend(card_path("ML/LOGS/HW_TEST.LOG"));
+        if (!log_fp) {
+            /* Log lost from here on. Surface it on screen instead of
+             * silently dropping every subsequent line. */
+            bmp_printf(FONT(FONT_SMALL, COLOR_RED, COLOR_BLACK),
+                       X0, line(), "log reopen failed - log truncated");
+        }
     }
 }
 
@@ -122,6 +148,23 @@ static void hdr(const char *s)
     scr_y += 28;
 }
 
+/* Record a PASS/FAIL. `why` is an annotation printed in BOTH directions; it
+ * never changes the classification. Use skip() for "not applicable here". */
+/* bmp_printf does no clipping, so a long reason string runs off the right edge.
+ * The reason column starts at X0+200; with FONT_SMALL that leaves room for
+ * roughly 60 characters on a 720px display. */
+#define WHY_SCREEN_CHARS 60
+static const char *clip_why(const char *why)
+{
+    static char buf[WHY_SCREEN_CHARS + 1];
+    if (!why) return "";
+    int n = (int)strlen(why);
+    if (n <= WHY_SCREEN_CHARS) return why;
+    memcpy(buf, why, WHY_SCREEN_CHARS);
+    buf[WHY_SCREEN_CHARS] = 0;
+    return buf;
+}
+
 static void rst(int pass, const char *name, const char *why)
 {
     t_total++;
@@ -131,17 +174,35 @@ static void rst(int pass, const char *name, const char *why)
     if (pass) {
         t_pass++;
         bmp_printf(FONT(FONT_SMALL, COLOR_GREEN1, COLOR_BLACK), X0 + 140, y, "PASS");
-        snprintf(log_buf, sizeof(log_buf), "[HW] %s: PASS", name);
-    } else if (why) {
-        t_skip++;
-        bmp_printf(FONT(FONT_SMALL, COLOR_YELLOW, COLOR_BLACK), X0 + 140, y, "SKIP");
-        bmp_printf(FONT(FONT_SMALL, COLOR_CYAN, COLOR_BLACK), X0 + 200, y, "%s", why);
-        snprintf(log_buf, sizeof(log_buf), "[HW] %s: SKIP (%s)", name, why);
+        if (why)
+            snprintf(log_buf, sizeof(log_buf), "[HW] %s: PASS (%s)", name, why);
+        else
+            snprintf(log_buf, sizeof(log_buf), "[HW] %s: PASS", name);
     } else {
         t_fail++;
         bmp_printf(FONT(FONT_SMALL, COLOR_RED, COLOR_BLACK), X0 + 140, y, "FAIL");
-        snprintf(log_buf, sizeof(log_buf), "[HW] %s: FAIL", name);
+        if (why) {
+            bmp_printf(FONT(FONT_SMALL, COLOR_CYAN, COLOR_BLACK), X0 + 200, y, "%s", clip_why(why));
+            snprintf(log_buf, sizeof(log_buf), "[HW] %s: FAIL (%s)", name, why);
+        } else {
+            snprintf(log_buf, sizeof(log_buf), "[HW] %s: FAIL", name);
+        }
     }
+    log_write(log_buf);
+}
+
+/* Record a SKIP: the test is genuinely not applicable (wrong platform, feature
+ * absent), not a failure of the hardware under test. */
+static void skip(const char *name, const char *why)
+{
+    t_total++;
+    int y = line();
+    bmp_printf(FONT_SMALL, X0, y, "%s", name);
+    t_skip++;
+    bmp_printf(FONT(FONT_SMALL, COLOR_YELLOW, COLOR_BLACK), X0 + 140, y, "SKIP");
+    bmp_printf(FONT(FONT_SMALL, COLOR_CYAN, COLOR_BLACK), X0 + 200, y, "%s", clip_why(why));
+    char log_buf[516];
+    snprintf(log_buf, sizeof(log_buf), "[HW] %s: SKIP (%s)", name, why);
     log_write(log_buf);
 }
 
@@ -320,44 +381,60 @@ static const reg_entry misc_regs[] = {
  * SD WRITE BENCHMARK (S9.2)
  * ──────────────────────────────────────────── */
 
-static void sd_bench(const char *path, int block_size, int blocks)
+static int sd_bench(const char *path, int block_size, int blocks)
 {
-    int total = block_size * blocks;
-    void *buf = fio_malloc(total);
+    /* Use 64-bit sizes throughout: block_size*blocks can overflow int, and
+     * dt*1024 wraps past ~4.2M ms in 32-bit arithmetic. */
+    uint64_t total = (uint64_t)block_size * (uint64_t)blocks;
+    void *buf = fio_malloc((uint32_t)total);
     if (!buf) {
         warn("sd_bench: alloc fail");
-        return;
+        return 0;
     }
-    memset(buf, 0xAA, total);
+    memset(buf, 0xAA, (uint32_t)total);
 
     uint32_t t0 = get_ms_clock();
     FILE *f = FIO_CreateFile(path);
     if (!f) {
         warn("sd_bench: create fail");
         fio_free(buf);
-        return;
+        return 0;
     }
+    int written = 0;
     for (int i = 0; i < blocks; i++) {
-        int w = FIO_WriteFile(f, (uint8_t*)buf + i * block_size, block_size);
+        int w = FIO_WriteFile(f, (uint8_t*)buf + (uint64_t)i * block_size, block_size);
         if (w != block_size) {
-            warn("sd_bench: write fail");
+            warn("sd_bench: short write - result discarded");
             break;
         }
+        written += w;
     }
     FIO_CloseFile(f);
     FIO_RemoveFile(path);
     uint32_t dt = get_ms_clock() - t0;
 
-    char b[80];
+    char b[192];
+    if (written != (int)total) {
+        /* Do not publish a throughput figure for bytes that were never written. */
+        snprintf(b, sizeof(b), "sd_%dK_w%d_blks: FAILED after %d/%u bytes",
+                 block_size/1024, blocks, written, (unsigned)total);
+        info(b);
+        fio_free(buf);
+        return 0;
+    }
+
     if (dt > 0) {
-        int kbps = ((uint64_t)total * 1000) / (dt * 1024);
-        snprintf(b, sizeof(b), "sd_%dK_w%d_blks: %dms %dKB/s", block_size/1024, blocks, dt, kbps);
+        uint64_t kbps = (total * 1000ULL) / ((uint64_t)dt * 1024ULL);
+        snprintf(b, sizeof(b), "sd_%dK_w%d_blks: %ums %uKB/s",
+                 block_size/1024, blocks, (unsigned)dt, (unsigned)kbps);
     } else {
-        snprintf(b, sizeof(b), "sd_%dK_w%d_blks: %dms", block_size/1024, blocks, dt);
+        snprintf(b, sizeof(b), "sd_%dK_w%d_blks: %ums (clock resolution too coarse)",
+                 block_size/1024, blocks, (unsigned)dt);
     }
     info(b);
 
     fio_free(buf);
+    return 1;
 }
 
 /* ────────────────────────────────────────────
@@ -368,9 +445,14 @@ static void hw_task(void *unused)
 {
     (void)unused;
 
+    /* Runtime camera detection. Modules are never compiled with -DCONFIG_70D
+     * (that flag only reaches the firmware CFLAGS), so this must be a runtime
+     * check - compile-time guards would silently take the wrong branch. */
+    is_70d = is_camera("70D", "1.1.2") || (camera_model_id == 0x80000325);
+
     /* === INIT LOG === */
     log_write_count = 0;
-    log_fp = FIO_CreateFile("ML/LOGS/HW_TEST.LOG");
+    log_fp = FIO_CreateFile(card_path("ML/LOGS/HW_TEST.LOG"));
     if (log_fp) {
         char buf[256];
         snprintf(buf, sizeof(buf),
@@ -392,14 +474,13 @@ static void hw_task(void *unused)
         char buf[80];
         snprintf(buf, sizeof(buf), "Model=0x%x %s %s", camera_model_id, camera_model, firmware_version);
         info(buf);
-#ifdef CONFIG_EOSM
-        int ok = (camera_model_id == 0x80000331);
-        rst(ok, "model_id_EOSM", ok ? 0 : "wrong camera");
-#else
-        int ok = (camera_model_id == 0x80000325);
-        rst(ok, "model_id_70D", ok ? 0 : "wrong camera");
-#endif
-        rst(shooting_mode >= 0, "shooting_mode", shooting_mode == 0 ? "boot" : 0);
+        {
+            int ok = (camera_model_id == 0x80000325);
+            rst(ok, "model_id_70D", ok ? 0 : "wrong camera");
+        }
+        /* shooting_mode is a plain int and can legitimately be 0 */
+        rst(shooting_mode >= 0 && shooting_mode <= 32, "shooting_mode",
+            shooting_mode == 0 ? "boot" : 0);
         rst(gui_state == 2, "gui_state_active", gui_state == 2 ? 0 : "not active");
     }
 
@@ -460,26 +541,36 @@ static void hw_task(void *unused)
      * S3: FILE I/O + SD BENCHMARK (S9.2)
      * ════════════════════════════════════════ */
     hdr("FILE I/O");
-    /* SD write path discovery */
+    /* SD write path discovery - remembers which form works (S46.16) */
     {
-        const char *paths[] = {"PING_A.TXT","A:/PING_A.TXT","B:/PING_A.TXT","PING_B.TXT",0};
+        /* value = prefix to prepend to every later card path */
+        static const char *probe[][2] = {
+            {"PING_A.TXT",   ""},       /* CWD is the card root - the normal case */
+            {"A:/PING_A.TXT","A:/"},
+            {"B:/PING_A.TXT","B:/"},
+        };
         int wrote = 0;
-        for (int i = 0; paths[i]; i++) {
-            FILE *f = FIO_CreateFile(paths[i]);
+        for (int i = 0; i < COUNT(probe); i++) {
+            FILE *f = FIO_CreateFile(probe[i][0]);
             if (!f) continue;
             int w = FIO_WriteFile(f, "ping", 4);
             FIO_CloseFile(f);
-            if (w == 4) { wrote = 1; FIO_RemoveFile(paths[i]); break; }
+            if (w == 4) {
+                wrote = 1;
+                snprintf(card_root, sizeof(card_root), "%s", probe[i][1]);
+                FIO_RemoveFile(probe[i][0]);
+                break;
+            }
+            FIO_RemoveFile(probe[i][0]);
         }
+        char b[192];
+        snprintf(b, sizeof(b), "  write prefix: '%s'", card_root[0] ? card_root : "(relative)");
+        info(b);
         rst(wrote, "sd_write", wrote ? 0 : "no path found");
     }
     /* Config file write+read-back (verify FAT flush works) */
     {
-        const char *cfg_paths[] = {
-            "ML/SETTINGS/HW_CFG.TST",
-            "B:/ML/SETTINGS/HW_CFG.TST",
-            "A:/ML/SETTINGS/HW_CFG.TST",
-        };
+        const char *cfg_paths[] = { card_path("ML/SETTINGS/HW_CFG.TST") };
         int ok = 0;
         for (int i = 0; i < COUNT(cfg_paths) && !ok; i++)
         {
@@ -501,11 +592,18 @@ static void hw_task(void *unused)
     }
 
     hdr("SD BENCHMARK (S9.2)");
-    sd_bench("ML/SETTINGS/HW_SD_1K.TMP", 1024, 1);
-    sd_bench("ML/SETTINGS/HW_SD_4K.TMP", 4096, 1);
-    sd_bench("ML/SETTINGS/HW_SD_64K.TMP", 65536, 1);
-    sd_bench("ML/SETTINGS/HW_SD_256K.TMP", 262144, 1);
-    sd_bench("ML/SETTINGS/HW_SD_1M.TMP", 262144, 4);
+    {
+        int bench_ok = 0, bench_n = 0;
+        bench_n++; bench_ok += sd_bench(card_path("ML/SETTINGS/HW_SD_1K.TMP"),    1024, 1);
+        bench_n++; bench_ok += sd_bench(card_path("ML/SETTINGS/HW_SD_4K.TMP"),    4096, 1);
+        bench_n++; bench_ok += sd_bench(card_path("ML/SETTINGS/HW_SD_64K.TMP"),  65536, 1);
+        bench_n++; bench_ok += sd_bench(card_path("ML/SETTINGS/HW_SD_256K.TMP"),262144, 1);
+        bench_n++; bench_ok += sd_bench(card_path("ML/SETTINGS/HW_SD_1M.TMP"),  262144, 4);
+        static char why[48];
+        if (bench_ok != bench_n)
+            snprintf(why, sizeof(why), "only %d/%d write tests succeeded", bench_ok, bench_n);
+        rst(bench_ok == bench_n, "sd_benchmark", bench_ok == bench_n ? 0 : why);
+    }
 
     blink_delay(500);
 
@@ -569,106 +667,109 @@ static void hw_task(void *unused)
 
     blink_delay(100);
 
-#ifdef CONFIG_70D
-    /* ════════════════════════════════════════
-     * S11: REGISTER DUMP — DUAL ISO (S6)
-     * ════════════════════════════════════════ */
-    hdr("DUAL ISO REGISTERS (S6)");
-    {
-        /* Use MEM() for RAM reads (NOT shamem_read — that only works for MMIO 0xC0Fxxxxx) */
-        uint32_t iso_base = 0x404E5664;
-        int iso_stops[] = {100, 200, 400, 800, 1600, 3200, 6400, 0};
-        char b[80];
-        for (int i = 0; iso_stops[i]; i++) {
-            uint32_t addr = iso_base + i * 0x14;
-            uint32_t val = MEM(addr) & 0xFFFF;
-            snprintf(b, sizeof(b), "ISO_%d (0x%08x)=0x%04x", iso_stops[i], addr, val);
-            info(b);
-        }
-        /* RAM region scan for ISO value pattern at stride 0x14 (photo mode) */
-        hdr("ISO TABLE RAM SCAN — stride 0x14 (S28.1)");
+if (is_70d)
+{
+        /* ════════════════════════════════════════
+         * S11: REGISTER DUMP — DUAL ISO (S6)
+         * ════════════════════════════════════════ */
+        hdr("DUAL ISO REGISTERS (S6)");
         {
-            uint16_t expected[7] = {0x0003, 0x0027, 0x004b, 0x006f, 0x0093, 0x00b7, 0x00db};
-            uint32_t scan_start = 0x40400000;
-            uint32_t scan_end   = 0x40500000;
-            int found = 0;
-            for (uint32_t base = scan_start; base < scan_end; base += 64) {
-                for (int a = 0; a < 64; a += 4) {
-                    uint32_t trial = base + a;
-                    uint32_t v0 = MEM(trial) & 0xFFFF;
-                    if (v0 == expected[0]) {
-                        int match = 1;
-                        for (int k = 1; k < 7; k++) {
-                            uint32_t vk = MEM(trial + k * 0x14) & 0xFFFF;
-                            if (vk != expected[k]) { match = 0; break; }
-                        }
-                        if (match) {
-                            snprintf(b, sizeof(b), "TABLE (stride 0x14) at 0x%08x", trial);
-                            info(b);
-                            for (int k = 0; k < 7; k++) {
+            /* Use MEM() for RAM reads (NOT shamem_read — that only works for MMIO 0xC0Fxxxxx) */
+            uint32_t iso_base = 0x404E5664;
+            int iso_stops[] = {100, 200, 400, 800, 1600, 3200, 6400, 0};
+            char b[192];
+            for (int i = 0; iso_stops[i]; i++) {
+                uint32_t addr = iso_base + i * 0x14;
+                uint32_t val = MEM(addr) & 0xFFFF;
+                snprintf(b, sizeof(b), "ISO_%d (0x%08x)=0x%04x", iso_stops[i], addr, val);
+                info(b);
+            }
+            /* RAM region scan for ISO value pattern at stride 0x14 (photo mode) */
+            hdr("ISO TABLE RAM SCAN — stride 0x14 (S28.1)");
+            {
+                uint16_t expected[7] = {0x0003, 0x0027, 0x004b, 0x006f, 0x0093, 0x00b7, 0x00db};
+                uint32_t scan_start = 0x40400000;
+                uint32_t scan_end   = 0x40500000;
+                int found = 0;
+                for (uint32_t base = scan_start; base < scan_end; base += 64) {
+                    for (int a = 0; a < 64; a += 4) {
+                        uint32_t trial = base + a;
+                        uint32_t v0 = MEM(trial) & 0xFFFF;
+                        if (v0 == expected[0]) {
+                            int match = 1;
+                            for (int k = 1; k < 7; k++) {
                                 uint32_t vk = MEM(trial + k * 0x14) & 0xFFFF;
-                                snprintf(b, sizeof(b), "  +0x%02x: ISO %d = 0x%04x",
-                                         k * 0x14, iso_stops[k], vk);
-                            info(b);
+                                if (vk != expected[k]) { match = 0; break; }
                             }
-                            found++;
+                            if (match) {
+                                snprintf(b, sizeof(b), "TABLE (stride 0x14) at 0x%08x", trial);
+                                info(b);
+                                for (int k = 0; k < 7; k++) {
+                                    uint32_t vk = MEM(trial + k * 0x14) & 0xFFFF;
+                                    snprintf(b, sizeof(b), "  +0x%02x: ISO %d = 0x%04x",
+                                             k * 0x14, iso_stops[k], vk);
+                                info(b);
+                                }
+                                found++;
+                            }
                         }
                     }
                 }
-            }
-            snprintf(b, sizeof(b), "Found %d table(s) at stride 0x14", found);
-            info(b);
-        }
-        /* Movie mode scan at stride 0x2E (46) — documented address 0x404e77d6 */
-        hdr("ISO TABLE RAM SCAN — stride 0x2E (movie mode)");
-        {
-            uint16_t expected[7] = {0x0003, 0x0027, 0x004b, 0x006f, 0x0093, 0x00b7, 0x00db};
-            int found = 0;
-            /* Check the documented movie mode base address */
-            uint32_t movie_base = 0x404e77d6;
-            int m = 1;
-            for (int k = 0; k < 7; k++) {
-                uint32_t vk = MEM(movie_base + k * 0x2E) & 0xFFFF;
-                if (vk != expected[k]) { m = 0; break; }
-            }
-            if (m) {
-                snprintf(b, sizeof(b), "MOVIE TABLE at 0x%08x (stride 0x2E)", movie_base);
+                snprintf(b, sizeof(b), "Found %d table(s) at stride 0x14", found);
                 info(b);
+            }
+            /* Movie mode scan at stride 0x2E (46) — documented address 0x404e77d6 */
+            hdr("ISO TABLE RAM SCAN — stride 0x2E (movie mode)");
+            {
+                uint16_t expected[7] = {0x0003, 0x0027, 0x004b, 0x006f, 0x0093, 0x00b7, 0x00db};
+                int found = 0;
+                /* Check the documented movie mode base address */
+                uint32_t movie_base = 0x404e77d6;
+                int m = 1;
                 for (int k = 0; k < 7; k++) {
                     uint32_t vk = MEM(movie_base + k * 0x2E) & 0xFFFF;
-                    snprintf(b, sizeof(b), "  +0x%02x: ISO %d = 0x%04x",
-                             k * 0x2E, iso_stops[k], vk);
+                    if (vk != expected[k]) { m = 0; break; }
+                }
+                if (m) {
+                    snprintf(b, sizeof(b), "MOVIE TABLE at 0x%08x (stride 0x2E)", movie_base);
+                    info(b);
+                    for (int k = 0; k < 7; k++) {
+                        uint32_t vk = MEM(movie_base + k * 0x2E) & 0xFFFF;
+                        snprintf(b, sizeof(b), "  +0x%02x: ISO %d = 0x%04x",
+                                 k * 0x2E, iso_stops[k], vk);
+                        info(b);
+                    }
+                    found++;
+                }
+                /* Also check if the LV table is at 0x404e7248 with stride 0x2E */
+                uint32_t lv_base = 0x404e7248;
+                int l = 1;
+                for (int k = 0; k < 7; k++) {
+                    uint32_t vk = MEM(lv_base + k * 0x2E) & 0xFFFF;
+                    if (vk != expected[k]) { l = 0; break; }
+                }
+                if (l) {
+                    snprintf(b, sizeof(b), "LV TABLE at 0x%08x (stride 0x2E)", lv_base);
+                    info(b);
+                    found++;
+                }
+                if (!found) {
+                    info("Movie mode table (stride 0x2E) NOT found at documented addresses");
+                    info("Enable adtglog2 module and change ISO in movie mode to find addresses");
+                } else {
+                    snprintf(b, sizeof(b), "Found %d movie mode table(s)", found);
                     info(b);
                 }
-                found++;
             }
-            /* Also check if the LV table is at 0x404e7248 with stride 0x2E */
-            uint32_t lv_base = 0x404e7248;
-            int l = 1;
-            for (int k = 0; k < 7; k++) {
-                uint32_t vk = MEM(lv_base + k * 0x2E) & 0xFFFF;
-                if (vk != expected[k]) { l = 0; break; }
-            }
-            if (l) {
-                snprintf(b, sizeof(b), "LV TABLE at 0x%08x (stride 0x2E)", lv_base);
-                info(b);
-                found++;
-            }
-            if (!found) {
-                info("Movie mode table (stride 0x2E) NOT found at documented addresses");
-                info("Enable adtglog2 module and change ISO in movie mode to find addresses");
-            } else {
-                snprintf(b, sizeof(b), "Found %d movie mode table(s)", found);
-                info(b);
-            }
+            /* ISO push register */
+            hexval("ISO_PUSH_D5", shamem_read(0xC0F42744));
         }
-        /* ISO push register */
-        hexval("ISO_PUSH_D5", shamem_read(0xC0F42744));
-    }
-#else
-    hdr("DUAL ISO REGISTERS (S6)");
-    rst(0, "dual_iso_regs_70D_only", "EOSM probe not yet ported");
-#endif
+}
+else
+{
+        hdr("DUAL ISO REGISTERS (S6)");
+        skip("dual_iso_regs_70D_only", "not a 70D - Dual ISO table addresses are model-specific");
+}
 
     blink_delay(100);
 
@@ -711,7 +812,7 @@ static void hw_task(void *unused)
             uint32_t e4 = shamem_read(0xC0F06804);
             uint32_t end_line = e4 >> 16;
             uint32_t end_col = e4 & 0xFFFF;
-            char b[80];
+            char b[192];
             snprintf(b, sizeof(b), "ENGIO_E04 last_line=%d last_col=%d", end_line, end_col);
             info(b);
         }
@@ -799,7 +900,7 @@ static void hw_task(void *unused)
         int found = 0;
         for (int i = 0; safe_names[i]; i++) {
             int r = call(safe_names[i]);
-            char b[80];
+            char b[192];
             snprintf(b, sizeof(b), "%s=%d", safe_names[i], r);
             info(b);
             if (r >= 0) found++;
@@ -811,184 +912,187 @@ static void hw_task(void *unused)
         const char *wifi_names[] = {"NwLimeInit","NwLimeOn","wlanpoweron","wlanup",
                                      "wlanchk","wlanipset",0};
         for (int i = 0; wifi_names[i]; i++) {
-            char b[80];
+            char b[192];
             snprintf(b, sizeof(b), "%s=(skip, needs HW)", wifi_names[i]);
             warn(b);
         }
-        rst(1, "wifi_stubs_documented", 0);
+        /* Nothing above is a measurement - it only lists names that must not be
+         * called. Record it as a skip so it does not inflate the PASS count. */
+        skip("wifi_stubs_documented", "names only, nothing called");
     }
 
-#ifdef CONFIG_70D
-    /* ════════════════════════════════════════
-     * S16b: WIFI / PTPIP STUB VALIDATION (S23)
-     * ════════════════════════════════════════
-     * READ-ONLY memory probes. No function calls.
-     * Verifies firmware has real code at known WiFi/PTPIP addresses.
-     * ════════════════════════════════════════ */
-    hdr("WIFI PTPIP STUBS (S23)");
-    {
-        typedef struct { const char *name; uint32_t addr; } addr_entry;
-        const addr_entry ptpip[] = {
-            {"ptpip_sock_create",   0xFF7AF220},
-            {"ptpip_bind_param",    0xFF7AEE18},
-            {"ptpip_open_server",   0xFF7AEE80},
-            {"ptpip_create_client", 0xFF7AF2CC},
-            {"ptpip_listen_close",  0xFF7AEFCC},
-            {"ptpip_close_server",  0xFF7AF344},
-            {"ptpip_set_keepalive", 0xFF7AF38C},
-            {"ptpip_errno_handler", 0xFF7AF3B4},
-            {"socket_close_caller", 0xFF14F74C},
-            {"socket_close_valid",  0xFF7AF380},
-            {"LiveViewWifiApp",     0xFF7523B4},
-            {0, 0}
-        };
-        int valid_count = 0, total = 0;
-        for (int i = 0; ptpip[i].name; i++) {
-            uint32_t *p = (uint32_t*)(uintptr_t)ptpip[i].addr;
-            total++;
-            /* Read first word of function — should be valid ARM instruction */
-            uint32_t first_word = *p;
-            int is_push = ((first_word & 0xFFFF0000) == 0xE92D0000);
-            int is_valid = (first_word != 0 && first_word != 0xFFFFFFFF);
-            if (is_valid) valid_count++;
-            char b[96];
-            snprintf(b, sizeof(b), "%s(0x%08x)=0x%08x%s%s",
-                     ptpip[i].name, ptpip[i].addr, first_word,
-                     is_valid ? " VALID" : " INVALID",
-                     is_push ? " PUSH" : "");
-            info(b);
-        }
-        char b[80];
-        snprintf(b, sizeof(b), "PTPIP: %d/%d valid stubs", valid_count, total);
-        info(b);
-        rst(valid_count == total, "ptpip_stubs", valid_count > 0 ? "partial" : "all invalid");
-    }
-
-    hdr("WIFI SOCKET API (S23)");
-    {
-        typedef struct { const char *name; uint32_t addr; } addr_entry;
-        const addr_entry sock[] = {
-            {"socket_create",    0x00059AF8},
-            {"socket_bind",      0x00059E94},
-            {"socket_connect",   0x00059DDC},
-            {"socket_listen",    0x0005A9D0},
-            {"socket_setsockopt", 0x0005A810},
-            {"socket_recv",      0x00059CE8},
-            {"socket_send",      0x0005A09C},
-            {0, 0}
-        };
-        int loaded = 0, total = 0;
-        for (int i = 0; sock[i].name; i++) {
-            uint32_t *p = (uint32_t*)(uintptr_t)sock[i].addr;
-            total++;
-            /* If address has valid ARM code, socket module is loaded */
-            uint32_t val = *p;
-            int is_loaded = (val != 0 && val != 0xFFFFFFFF);
-            if (is_loaded) loaded++;
-            char b[96];
-            snprintf(b, sizeof(b), "%s(0x%08x)=0x%08x %s",
-                     sock[i].name, sock[i].addr, val,
-                     is_loaded ? "LOADED" : "NOT_LOADED");
-            info(b);
-        }
-        char b[80];
-        snprintf(b, sizeof(b), "Socket API: %d/%d loaded", loaded, total);
-        info(b);
-        rst(loaded > 0, "sock_api_loaded", loaded == 0 ? "not loaded" : 0);
-    }
-
-    hdr("WIFI NW COMMANDS (S23)");
-    {
-        uint32_t *p = (uint32_t*)(uintptr_t)0xFF46CCD8;
-        uint32_t val = *p;
-        int valid = (val != 0 && val != 0xFFFFFFFF);
-        char b[80];
-        snprintf(b, sizeof(b), "NW_cmds(0xFF46CCD8)=0x%08x %s", val, valid ? "VALID" : "INVALID");
-        info(b);
-        rst(valid, "nw_cmd_interface", valid ? 0 : "invalid");
-
-        /* Also check if NW-related call() names might exist by documenting them */
-        info("NW call() names: NwLimeInit, NwLimeOn (ROM1 check needed)");
-        /* Check if NwLimeInit eventproc exists by reading the eventproc table */
-        /* DryOS eventproc dispatch at 0xFF14439C (call). Table addr unknown on 70D. */
-        warn("call(\"NwLimeInit\") NOT safe to call without WiFi HW context");
-    }
-
-    /* WiFi summary */
-    {
-        /* Final assessment: are WiFi stubs usable? */
-        info("WiFi assessment: PTPIP ROM1 stubs are always resident");
-        info("Socket API load status indicates if NW is initialized");
-        rst(1, "wifi_probe_complete", 0);
-    }
-#else
-    hdr("WIFI / PTPIP (S23)");
-    rst(0, "ptpip_stubs", "SKIP (no WiFi on EOSM)");
-    rst(0, "sock_api_loaded", "SKIP (no WiFi on EOSM)");
-    rst(0, "nw_cmd_interface", "SKIP (no WiFi on EOSM)");
-    rst(1, "wifi_probe_complete", "SKIP (no WiFi on EOSM)");
-#endif
-
-#ifdef CONFIG_70D
-    /* ════════════════════════════════════════
-     * S30.7: WIFI CHIPSET PROBE
-     * ════════════════════════════════════════
-     * READ-ONLY memory probes to identify WiFi chipset.
-     * NO SDIO commands — reads only known RAM/ROM locations.
-     * ════════════════════════════════════════ */
-    hdr("WIFI CHIPSET PROBE (S30.7)");
-    {
-        /* Check hardcoded IP address 192.168.1.20 in RAM (confirms WiFi stack init) */
-        /* Known from RAM dump: appears 25+ times in RAM */
-        const uint32_t ip_pattern = 0xC0A80114; /* 192.168.1.20 in network byte order */
-        uint32_t ip_buf = 0;
-        int ip_found = 0;
-        /* Scan a few known locations from the RAM dump */
-        uint32_t scan_addrs[] = {0x4001B000, 0x40020000, 0x40080000, 0x40200000, 0};
-        for (int i = 0; scan_addrs[i]; i++) {
-            uint32_t *p = (uint32_t*)(uintptr_t)scan_addrs[i];
-            uint32_t v = *p;
-            if (v == ip_pattern || v == 0x1401A8C0) {
-                ip_found = 1;
-                ip_buf = v;
-                char b[80];
-                snprintf(b, sizeof(b), "IP 192.168.1.20 found at 0x%08x=0x%08x", scan_addrs[i], v);
+if (is_70d)
+{
+        /* ════════════════════════════════════════
+         * S16b: WIFI / PTPIP STUB VALIDATION (S23)
+         * ════════════════════════════════════════
+         * READ-ONLY memory probes. No function calls.
+         * Verifies firmware has real code at known WiFi/PTPIP addresses.
+         * ════════════════════════════════════════ */
+        hdr("WIFI PTPIP STUBS (S23)");
+        {
+            typedef struct { const char *name; uint32_t addr; } addr_entry;
+            const addr_entry ptpip[] = {
+                {"ptpip_sock_create",   0xFF7AF220},
+                {"ptpip_bind_param",    0xFF7AEE18},
+                {"ptpip_open_server",   0xFF7AEE80},
+                {"ptpip_create_client", 0xFF7AF2CC},
+                {"ptpip_listen_close",  0xFF7AEFCC},
+                {"ptpip_close_server",  0xFF7AF344},
+                {"ptpip_set_keepalive", 0xFF7AF38C},
+                {"ptpip_errno_handler", 0xFF7AF3B4},
+                {"socket_close_caller", 0xFF14F74C},
+                {"socket_close_if_valid", 0xFF7AF380},
+                {"LiveViewWifiApp",     0xFF7523B4},
+                {0, 0}
+            };
+            int valid_count = 0, total = 0;
+            for (int i = 0; ptpip[i].name; i++) {
+                uint32_t *p = (uint32_t*)(uintptr_t)ptpip[i].addr;
+                total++;
+                /* Read first word of function — should be valid ARM instruction */
+                uint32_t first_word = *p;
+                int is_push = ((first_word & 0xFFFF0000) == 0xE92D0000);
+                int is_valid = (first_word != 0 && first_word != 0xFFFFFFFF);
+                if (is_valid) valid_count++;
+                char b[192];
+                snprintf(b, sizeof(b), "%s(0x%08x)=0x%08x%s%s",
+                         ptpip[i].name, ptpip[i].addr, first_word,
+                         is_valid ? " VALID" : " INVALID",
+                         is_push ? " PUSH" : "");
                 info(b);
-                break;
             }
+            char b[192];
+            snprintf(b, sizeof(b), "ROM1 WiFi/PTPIP targets: %d/%d valid code", valid_count, total);
+            info(b);
+            rst(valid_count == total, "ptpip_stubs", valid_count > 0 ? "partial" : "all invalid");
         }
-        rst(ip_found, "wifi_ip_verify", ip_found ? "IP found in RAM" : "IP not found");
 
-        /* DLNA/UPnP details known from RAM dump analysis on physical hardware */
-        /* Full UPnP descriptor confirmed: urn:schemas-upnp-org:device:MediaServer:1 */
-        /* Web UI at http://192.168.1.20/presentation.html */
-        info("DLNA Media Server: confirmed in RAM dump (UPnP AV, DMS-1.50)");
-        rst(1, "dlna_upnp_verify", "confirmed in RAM dump (Sprint 29)");
-
-        /* WLAN chipset identified from firmware source paths */
-        /* Codename "diana" (Broadcom platform), nelmgr/nell stack */
-        /* RAM dump confirmed WLANSDCOMDRV_ReadByte at resident address */
-        info("WLAN chipset: Diana/Broadcom (nelmgr stack, SDIO transport)");
-        rst(1, "wlan_chipset_id", "Diana/Broadcom from ROM source paths");
-
-        /* Check for SDIO WLAN driver function table */
-        /* The RAM dump identified WLANSDCOMDRV_ReadByte at a specific address */
-        /* If this address has code loaded, the WLAN SDIO driver is initialized */
-        uint32_t *wlan_drv_check = (uint32_t*)(uintptr_t)0xFF7AEE80;
-        uint32_t wlan_val = *wlan_drv_check;
-        int wlan_initialized = (wlan_val != 0 && wlan_val != 0xFFFFFFFF);
-        rst(wlan_initialized, "wlan_sdio_drv_init", wlan_initialized ? "PTPIP server code resident" : "PTPIP not in ROM");
-        if (wlan_initialized) {
-            info("PTPIP server code at 0xFF7AEE80 confirmed resident (WiFi stack in ROM)");
+        hdr("WIFI SOCKET API (S23)");
+        {
+            typedef struct { const char *name; uint32_t addr; } addr_entry;
+            const addr_entry sock[] = {
+                {"socket_create",    0x00059AF8},
+                {"socket_bind",      0x00059E94},
+                {"socket_connect",   0x00059DDC},
+                {"socket_listen",    0x0005A9D0},
+                {"socket_setsockopt", 0x0005A810},
+                {"socket_recv",      0x00059CE8},
+                {"socket_send",      0x0005A09C},
+                {0, 0}
+            };
+            int loaded = 0, total = 0;
+            for (int i = 0; sock[i].name; i++) {
+                uint32_t *p = (uint32_t*)(uintptr_t)sock[i].addr;
+                total++;
+                /* If address has valid ARM code, socket module is loaded */
+                uint32_t val = *p;
+                int is_loaded = (val != 0 && val != 0xFFFFFFFF);
+                if (is_loaded) loaded++;
+                char b[192];
+                snprintf(b, sizeof(b), "%s(0x%08x)=0x%08x %s",
+                         sock[i].name, sock[i].addr, val,
+                         is_loaded ? "LOADED" : "NOT_LOADED");
+                info(b);
+            }
+            char b[192];
+            snprintf(b, sizeof(b), "Socket API: %d/%d loaded", loaded, total);
+            info(b);
+            rst(loaded > 0, "sock_api_loaded", loaded == 0 ? "not loaded" : 0);
         }
-    }
-#else
-    hdr("WIFI CHIPSET PROBE (S30.7)");
-    rst(0, "wifi_ip_verify", "SKIP (no WiFi on EOSM)");
-    rst(0, "dlna_upnp_verify", "SKIP (no WiFi on EOSM)");
-    rst(0, "wlan_chip_strings", "SKIP (no WiFi on EOSM)");
-    rst(0, "wlan_sdio_drv_init", "SKIP (no WiFi on EOSM)");
-#endif
+
+        hdr("WIFI NW COMMANDS (S23)");
+        {
+            uint32_t *p = (uint32_t*)(uintptr_t)0xFF46CCD8;
+            uint32_t val = *p;
+            int valid = (val != 0 && val != 0xFFFFFFFF);
+            char b[192];
+            snprintf(b, sizeof(b), "NW_cmds(0xFF46CCD8)=0x%08x %s", val, valid ? "VALID" : "INVALID");
+            info(b);
+            rst(valid, "nw_cmd_interface", valid ? 0 : "invalid");
+
+            /* Also check if NW-related call() names might exist by documenting them */
+            info("NW call() names: NwLimeInit, NwLimeOn (ROM1 check needed)");
+            /* Check if NwLimeInit eventproc exists by reading the eventproc table */
+            /* DryOS eventproc dispatch at 0xFF14439C (call). Table addr unknown on 70D. */
+            warn("call(\"NwLimeInit\") NOT safe to call without WiFi HW context");
+        }
+
+        /* WiFi summary */
+        {
+            /* Final assessment: are WiFi stubs usable? */
+            info("WiFi assessment: PTPIP ROM1 stubs are always resident");
+            info("Socket API load status indicates if NW is initialized");
+        }
+}
+else
+{
+        hdr("WIFI / PTPIP (S23)");
+        skip("ptpip_stubs", "not a 70D - WiFi/PTPIP addresses are 70D-specific");
+        skip("sock_api_loaded", "not a 70D - WiFi socket addresses are 70D-specific");
+        skip("nw_cmd_interface", "not a 70D - NW command table address is 70D-specific");
+}
+
+if (is_70d)
+{
+        /* ════════════════════════════════════════
+         * S30.7: WIFI CHIPSET PROBE
+         * ════════════════════════════════════════
+         * READ-ONLY memory probes to identify WiFi chipset.
+         * NO SDIO commands — reads only known RAM/ROM locations.
+         * ════════════════════════════════════════ */
+        hdr("WIFI CHIPSET PROBE (S30.7)");
+        {
+            /* Check hardcoded IP address 192.168.1.20 in RAM (confirms WiFi stack init).
+             * Known from RAM dump: appears 25+ times in RAM. */
+            const uint32_t ip_pattern = 0xC0A80114; /* 192.168.1.20 in network byte order */
+            int ip_found = 0;
+            uint32_t ip_addr = 0, ip_value = 0;
+            /* Scan a few known locations from the RAM dump */
+            const uint32_t scan_addrs[] = {0x4001B000, 0x40020000, 0x40080000, 0x40200000, 0};
+            for (int i = 0; scan_addrs[i]; i++) {
+                uint32_t v = MEM(scan_addrs[i]);
+                if (v == ip_pattern || v == 0x1401A8C0) {
+                    ip_found = 1;
+                    ip_addr = scan_addrs[i];
+                    ip_value = v;
+                    break;
+                }
+            }
+            if (ip_found) {
+                char b[192];
+                snprintf(b, sizeof(b), "IP 192.168.1.20 found at 0x%08x=0x%08x", ip_addr, ip_value);
+                info(b);
+            } else {
+                /* The scan addresses are guesses taken from an old RAM dump; not
+                 * finding the string here says nothing about the WiFi stack. */
+                info("IP 192.168.1.20 not found at the sample addresses (heuristic)");
+            }
+
+            /* DLNA/UPnP and chipset identity are documented facts from the RAM-dump
+             * analysis (Sprint 29), not runtime measurements - report, do not score. */
+            info("DLNA Media Server: UPnP AV, DMS-1.50 (from RAM dump)");
+            info("WLAN chipset: Diana/Broadcom, nelmgr stack, SDIO transport");
+
+            /* PTPIP open_server entry point should contain real ARM code.
+             * Read the first instruction word rather than calling it. */
+            uint32_t wlan_val = *(volatile uint32_t *)(uintptr_t)0xFF7AEE80;
+            int wlan_initialized = (wlan_val != 0 && wlan_val != 0xFFFFFFFF);
+            {
+                char b[192];
+                snprintf(b, sizeof(b), "PTPIP open_server @0xFF7AEE80 = 0x%08x", wlan_val);
+                info(b);
+            }
+            rst(wlan_initialized, "wlan_sdio_drv_init",
+                wlan_initialized ? "PTPIP code resident" : "no code at 0xFF7AEE80");
+        }
+}
+else
+{
+        hdr("WIFI CHIPSET PROBE (S30.7)");
+        skip("wifi_ip_verify", "not a 70D");
+        skip("wlan_sdio_drv_init", "not a 70D");
+}
 
     log_flush();
     blink_delay(500);
@@ -1006,7 +1110,7 @@ static void hw_task(void *unused)
         int t0 = get_ms_clock();
         msleep(100);
         int dt = get_ms_clock() - t0;
-        char b[80];
+        char b[192];
         snprintf(b, sizeof(b), "msleep(100)=%dms", dt);
         info(b);
         rst(dt >= 90 && dt <= 500, "msleep_100", dt < 90 ? "too fast" : "drift");
@@ -1020,11 +1124,20 @@ static void hw_task(void *unused)
      * ════════════════════════════════════════ */
     hdr("FOCUS SYSTEM (S18b)");
     {
-        int r = call("AdjustFocusLens");
-        char b[80];
-        snprintf(b, sizeof(b), "AdjustFocusLens=%d", r);
+        /* AdjustFocusLens is a lens DRIVER entry point, not a probe: calling it
+         * with garbage r0-r3 physically moves the focus motor. There is also no
+         * 70D NSTUB for it, so it can only be reached through call() - which
+         * returns 0 or -1 and cannot distinguish "moved the lens" from
+         * "absent". Verify the lens property path instead (read-only). */
+        info("  AdjustFocusLens: lens driver, NOT invoked (would move the motor)");
+        info("  Verifying PROP_LV_LENS-derived lens_info fields instead:");
+        char b[192];
+        snprintf(b, sizeof(b), "  lens_info.job_state=%d focus_pos=%d focus_dist=%d",
+                 (int)lens_info.job_state, (int)lens_info.focus_pos,
+                 (int)lens_info.focus_dist);
         info(b);
-        rst(r >= -1, "adjust_focus_nstub", r < -1 ? "error" : 0);
+        /* No verdict here on purpose: the only thing we can honestly observe
+         * read-only is that the struct is reachable. */
     }
 
     /* ════════════════════════════════════════
@@ -1032,29 +1145,39 @@ static void hw_task(void *unused)
      * ════════════════════════════════════════ */
     hdr("DISPLAY FEATURES (S18c)");
     {
-        /* Color scheme: cycle through all 8 options */
+        /* bmp_color_scheme is a 2-state CONFIG_INT (src/tweaks.c); values 2..7
+         * have no defined behaviour. Verify the two real states round-trip. */
         extern int bmp_color_scheme;
         int orig_scheme = bmp_color_scheme;
-        for (int s = 0; s <= 7; s++) {
-            bmp_color_scheme = s;
-            char b[80];
-            snprintf(b, sizeof(b), "color_scheme=%d", s);
-            info(b);
-        }
+        int scheme_ok = (bmp_color_scheme == 0 || bmp_color_scheme == 1);
+        bmp_color_scheme = 0;
+        scheme_ok = scheme_ok && (bmp_color_scheme == 0);
+        bmp_color_scheme = 1;
+        scheme_ok = scheme_ok && (bmp_color_scheme == 1);
         bmp_color_scheme = orig_scheme;
-        rst(1, "color_schemes", 0);
+        rst(scheme_ok, "color_schemes", scheme_ok ? 0 : "bmp_color_scheme out of range");
 
-        /* False color palette: cycle through all 7 options */
+        /* False colour palettes 0..5 are static tables; 6 is the computed
+         * custom-range ramp (Sprint 42). Verify each resolves to a byte that
+         * actually belongs to that palette. */
         int orig_pal = falsecolor_palette;
+        int pal_bad = 0;
         for (int p = 0; p <= 6; p++) {
             falsecolor_palette = p;
             int c = falsecolor_value_ex(p, 128);
-            char b[80];
-            snprintf(b, sizeof(b), "fc_pal%d[128]=0x%02X", p, c);
+            char b[192];
+            snprintf(b, sizeof(b), "  fc_pal%d[128]=0x%02X", p, c);
             info(b);
+            if (p < 6) {
+                int found = 0;
+                for (int i = 0; i < 256; i++)
+                    if (false_colour[p][i] == (uint8_t)c) { found = 1; break; }
+                if (!found) pal_bad++;
+            }
         }
         falsecolor_palette = orig_pal;
-        rst(1, "falsecolor_palettes", 0);
+        rst(pal_bad == 0, "falsecolor_palettes",
+            pal_bad ? "palette value not present in its own table" : 0);
     }
     hdr("DISPLAY SYSTEM");
     {
@@ -1064,14 +1187,14 @@ static void hw_task(void *unused)
             hexval("bmp_vram_ptr", (uint32_t)(uintptr_t)vram);
         }
 
-        /* Palette write/read-back test */
-        uint32_t pal_test_addr = 0xC0F14080;
-        uint32_t orig = shamem_read(pal_test_addr);
-        uint32_t test_val = 0x0346de7f;
-        EngDrvOut(pal_test_addr, test_val);
-        uint32_t readback = shamem_read(pal_test_addr);
-        EngDrvOut(pal_test_addr, orig);
-        rst(readback == test_val, "palette_rw", "write/read mismatch");
+        /* Palette sanity check - READ ONLY.
+         * The old code wrote a test value to PAL_0 (0xC0F14080), which is the
+         * background colour used by every ML overlay, and restored it from the
+         * ENGIO *shadow*. A bogus shadow read left the palette corrupted. This
+         * module is contractually read-only, so we only inspect it. */
+        uint32_t pal0 = shamem_read(0xC0F14080);
+        hexval("palette0", pal0);
+        rst(pal0 != 0, "palette0_readable", pal0 ? 0 : "PAL_0 reads back as zero");
     }
 
     blink_delay(500);
@@ -1094,8 +1217,12 @@ static void hw_task(void *unused)
      * ════════════════════════════════════════ */
     hdr("THREAD SYNC");
     {
+        /* ML provides create/take/give but NO destroy API (src/dryos.h has no
+         * delete_semaphore). So create once and cache the handle across runs
+         * instead of leaking a fresh handle every time the suite executes. */
+        static struct semaphore *sem = 0;
         int sem_ok = 0;
-        void *sem = create_named_semaphore("HW_TEST", 1);
+        if (!sem) sem = create_named_semaphore("HW_TEST", 1);
         if (sem) {
             sem_ok = 1;
             int t1 = take_semaphore(sem, 100);
@@ -1104,9 +1231,8 @@ static void hw_task(void *unused)
             } else {
                 sem_ok = 0;
             }
-            /* destroy semaphore (implementation varies) */
         }
-        rst(sem_ok, "semaphore", sem_ok ? 0 : "fail");
+        rst(sem_ok, "semaphore", sem_ok ? 0 : "create/take failed");
     }
 
     log_flush();
@@ -1123,43 +1249,67 @@ static void hw_task(void *unused)
             const char *name;
             uint32_t addr;
             uint32_t expected;
+            int needs_lv;       /* baseline only valid while LiveView is active */
             const char *note;
         } baseline_entry;
 
-        /* Known-good values from hw_test v16 on physical 70D (2026-04-30) */
-        /* Camera state: M mode, LV active, gui_state=0, lv_dispsize=1 */
+        /* Known-good values from hw_test v16 on physical 70D (2026-04-30),
+         * captured in M mode with LiveView active and lv_dispsize=1.
+         *
+         * This module auto-runs at boot, where LiveView is NOT active, so any
+         * LV-dependent register cannot possibly match.  Those entries are
+         * reported for the record but are not scored.  (Scoring them made this
+         * test a permanent SKIP, which hid real deltas in the FPS registers.)
+         *
+         * FPS_TB was transcribed as 0x000005F4, but the hardware value recorded
+         * in AGENTS.md is 0x05F5 - corrected here. */
         const baseline_entry baselines[] = {
-            {"FPS_TA",       0xC0F06008, 0x02BB02BB, "idle GUI (TA|TA<<16)"},
-            {"FPS_TB",       0xC0F06014, 0x000005F4, "idle GUI"},
-            {"ENGIO_TL",     0xC0F06800, 0x0001000F, "idle GUI LV"},
-            {"FPS_CF",       0xC0F06000, 0x00000001, "confirm changes"},
-            {"ENGIO_HD3",    0xC0F0713C, 0x000004E5, "HEAD3, idle GUI LV"},
-            {"ENGIO_HD4",    0xC0F07150, 0x000004A9, "HEAD4, idle GUI LV"},
-            {0, 0, 0, 0}
+            {"FPS_TA",    0xC0F06008, 0x02BB02BB, 0, "row timing (TA|TA<<16)"},
+            {"FPS_TB",    0xC0F06014, 0x000005F5, 0, "frame timing"},
+            {"FPS_CF",    0xC0F06000, 0x00000001, 0, "confirm changes"},
+            {"ENGIO_TL",  0xC0F06800, 0x0001000F, 1, "top-left readout window"},
+            {"ENGIO_HD3", 0xC0F0713C, 0x000004E5, 1, "HEAD3 end column"},
+            {"ENGIO_HD4", 0xC0F07150, 0x000004A9, 1, "HEAD4 end column"},
+            {0, 0, 0, 0, 0}
         };
 
-        int match = 0, total = 0;
+        int lv_active = lv;
+        info(lv_active ? "LiveView active - all baselines scored"
+                       : "LiveView inactive - LV baselines logged, not scored");
+
+        int match = 0, scored = 0, unscored = 0;
         for (int i = 0; baselines[i].name; i++) {
-            total++;
             uint32_t val = shamem_read(baselines[i].addr);
             int ok = (val == baselines[i].expected);
-            if (ok) match++;
-            char b[96];
+            int comparable = (!baselines[i].needs_lv || lv_active);
+            if (comparable) {
+                scored++;
+                if (ok) match++;
+            } else {
+                unscored++;
+            }
+            char b[192];
             snprintf(b, sizeof(b), "%s(0x%08x)=0x%08x expect=0x%08x %s",
                      baselines[i].name, baselines[i].addr, val,
                      baselines[i].expected,
-                     ok ? "OK" : "MISMATCH");
-            if (ok) info(b); else warn(b);
+                     !comparable ? "N/A (LV off)" : ok ? "OK" : "MISMATCH");
+            if (comparable && !ok) warn(b); else info(b);
             char csv[128];
             snprintf(csv, sizeof(csv), "BL,%s,0x%08x,0x%08x,0x%08x,%s",
                      baselines[i].name, baselines[i].addr, val,
-                     baselines[i].expected, ok ? "OK" : "DELTA");
+                     baselines[i].expected,
+                     !comparable ? "N/A" : ok ? "OK" : "DELTA");
             log_write(csv);
         }
-        char b[80];
-        snprintf(b, sizeof(b), "Baseline: %d/%d match", match, total);
+        char b[192];
+        snprintf(b, sizeof(b), "Baseline: %d/%d match (%d not comparable)",
+                 match, scored, unscored);
         info(b);
-        rst(match == total, "register_baseline", match > 0 ? "partial" : "all mismatch");
+        if (scored == 0)
+            skip("register_baseline", "no baseline is comparable in this camera state");
+        else
+            rst(match == scored, "register_baseline",
+                match == scored ? 0 : "one or more FPS baselines differ");
     }
 
     log_flush();
@@ -1179,26 +1329,17 @@ static void hw_task(void *unused)
             uint32_t size;
         } ram_region;
 
-#ifdef CONFIG_EOSM
         const ram_region regions[] = {
-            {"LOWER",  0x40000000, 0x01000000},  /* 16MB — firmware data */
-            {"MID",    0x41000000, 0x00800000},  /*  8MB — Canon structs / GUI buffers */
-            {"UPPER",  0x4E000000, 0x01000000},  /* 16MB — upper 256MB range */
+            {"LOWER",  0x40000000, 0x01000000},  /* 16MB - primary firmware data */
+            {"ISO",    0x40400000, 0x00100000},  /*  1MB - ISO tables region */
+            {"UPPER",  0x4E000000, 0x01000000},  /* 16MB - upper RAM / ML pool */
             {0, 0, 0}
         };
-#else
-        const ram_region regions[] = {
-            {"LOWER",  0x40000000, 0x01000000},  /* 16MB — primary firmware data */
-            {"ISO",    0x40400000, 0x00100000},  /*  1MB — ISO tables region */
-            {"UPPER",  0x4E000000, 0x01000000},  /* 16MB — upper RAM / ML pool */
-            {0, 0, 0}
-        };
-#endif
 
         int dumps_ok = 0, total = 0;
         for (int r = 0; regions[r].label; r++) {
             total++;
-            char b[80];
+            char b[192];
             snprintf(b, sizeof(b), "Dumping %s (0x%08x, %dMB)...",
                      regions[r].label, regions[r].start, regions[r].size >> 20);
             info(b);
@@ -1207,7 +1348,7 @@ static void hw_task(void *unused)
             char fname[32];
             snprintf(fname, sizeof(fname), "RAM_%s.BIN", regions[r].label);
             char path[64];
-            snprintf(path, sizeof(path), "ML/LOGS/%s", fname);
+            snprintf(path, sizeof(path), "%sML/LOGS/%s", card_root, fname);
 
             FILE *fp = FIO_CreateFile(path);
             if (!fp) {
@@ -1225,77 +1366,108 @@ static void hw_task(void *unused)
 
             uint32_t remaining = regions[r].size;
             uint32_t offset = 0;
-            int total_written = 0;
+            uint32_t total_written = 0;
             int ok = 1;
+
+            /* Sidecar map: one byte per 256 KB chunk, '1' = present,
+             * '0' = skipped. Without it the output file cannot be mapped
+             * back to addresses once any chunk is dropped. */
+            char map_name[48];
+            snprintf(map_name, sizeof(map_name), "%sML/LOGS/RAM_%s.MAP",
+                     card_root, regions[r].label);
+            FILE *mf = FIO_CreateFile(map_name);
 
             while (remaining > 0 && ok) {
                 uint32_t chunk = (remaining > 262144) ? 262144 : remaining;
                 uint32_t src = regions[r].start + offset;
+                char mapc = '0';
 
-                /* Safety probe — skip if first word looks unmapped (all Fs) */
-                uint32_t probe = *(volatile uint32_t*)(uintptr_t)src;
-                if (probe == 0xFFFFFFFF) {
+                /* chunk is clamped to `remaining`, so the tail never over-reads */
+
+                /* Probe the FIRST and LAST word of the chunk. Probing only the
+                 * first word copies straddling chunks blind, and the probe
+                 * itself is an unvalidated read - keep it inside the chunk. */
+                uint32_t first = *(volatile uint32_t*)(uintptr_t)src;
+                uint32_t last  = *(volatile uint32_t*)(uintptr_t)(src + chunk - 4);
+                int unmapped = (first == 0xFFFFFFFF && last == 0xFFFFFFFF) ||
+                               (first == 0xAAAAAAAA && last == 0xAAAAAAAA);
+                if (unmapped) {
                     offset += chunk;
                     remaining -= chunk;
+                    if (mf) FIO_WriteFile(mf, &mapc, 1);
                     continue;
                 }
 
                 memcpy(buf, (void*)(uintptr_t)src, chunk);
-                int written = FIO_WriteFile(fp, buf, chunk);
-                if (written <= 0) {
-                    ok = 0;
-                    break;
+
+                /* Retry short writes - a partial write that still advances the
+                 * offset silently misaligns the whole rest of the file. */
+                uint32_t done = 0;
+                while (done < chunk) {
+                    int w = FIO_WriteFile(fp, buf + done, chunk - done);
+                    if (w <= 0) { ok = 0; break; }
+                    done += w;
                 }
-                total_written += written;
+                if (!ok) break;
+
+                total_written += done;
                 offset += chunk;
                 remaining -= chunk;
+                mapc = '1';
+                if (mf) FIO_WriteFile(mf, &mapc, 1);
             }
 
+            if (mf) FIO_CloseFile(mf);
             fio_free(buf);
             FIO_CloseFile(fp);
 
-            if (ok) {
+            /* Success means the whole region landed, not "some bytes were written". */
+            if (ok && total_written == regions[r].size) {
                 dumps_ok++;
-                snprintf(b, sizeof(b), "  %s: %dMB written", fname, total_written >> 20);
+                snprintf(b, sizeof(b), "  %s: %uMB written", fname,
+                         (unsigned)(total_written >> 20));
                 info(b);
             } else {
-                snprintf(b, sizeof(b), "  %s: FAIL at offset 0x%x", fname, offset);
+                ok = 0;
+                snprintf(b, sizeof(b), "  %s: FAIL at offset 0x%x (%u/%u bytes)",
+                         fname, (unsigned)offset, (unsigned)total_written,
+                         (unsigned)regions[r].size);
                 warn(b);
             }
         }
-        rst(dumps_ok == total, "ram_dump", dumps_ok > 0 ? "partial" : "all failed");
-        info("RAM dumps in ML/LOGS/RAM_*.BIN — copy to PC for strings/hexdump/IDA");
+        rst(dumps_ok == total, "ram_dump",
+            dumps_ok == total ? 0 : "one or more regions incomplete - see RAM_*.MAP");
+        info("RAM dumps in ML/LOGS/RAM_*.BIN + RAM_*.MAP — copy to PC");
     }
 
     log_flush();
     blink_delay(500);
 
     /* ════════════════════════════════════════
-     * S30.2: GPS PROBE (info only — not in call() table)
+     * S30.2: GPS PROBE (info only)
+     * ════════════════════════════════════════
+     * GPS on the 70D is external (GP-E2) only - there is no internal chip and no
+     * GPS_* entry reachable from call(), so call() returns -1 for every name.
+     * NwLimeInit/NwLimeOn were never resolved on this body either and are
+     * unsafe to invoke (they would bootstrap the WiFi/SDIO stack with no context),
+     * so they are listed, never called.
      * ════════════════════════════════════════ */
     hdr("GPS PROBE (S30.2)");
     {
-        const char *gps_tests[] = {
-            "GPS_Initialize",
-            "GetGPSTime",
-            "GetGPSListRecvCapability",
-            "GetGPSCaptureTimeList",
-            "GPSList",
-            "GPSClearList",
-            "NwLimeInit",
-            "NwLimeOn",
+        static const char *const gps_names[] = {
+            "GPS_Initialize", "GetGPSTime", "GetGPSListRecvCapability",
+            "GetGPSCaptureTimeList", "GPSList", "GPSClearList",
             0
         };
-        for (int i = 0; gps_tests[i]; i++) {
-            char b[80];
-            int r = call(gps_tests[i]);
+        for (int i = 0; gps_names[i]; i++) {
+            char b[192];
+            int r = call(gps_names[i]);
             snprintf(b, sizeof(b), "  call(\"%s\") = %d%s",
-                     gps_tests[i], r, r == 0 ? "" : r < 0 ? " NOT_FOUND" : "");
+                     gps_names[i], r, r < 0 ? " NOT_FOUND" : "");
             info(b);
         }
-        info("  GPS & NwLime functions expected to be absent from call() table.");
-        rst(0, "gps_probe", "info-only — GPS/NwLime not in call()");
-        info("");
+        info("  NwLimeInit / NwLimeOn: NOT probed (never resolved on 70D)");
+        info("  70D has no internal GPS - GP-E2 accessory only, no CONFIG_GPS.");
     }
 
     /* ════════════════════════════════════════
@@ -1303,103 +1475,99 @@ static void hw_task(void *unused)
      * ════════════════════════════════════════ */
     hdr("DEFECT PROBE (S30.3)");
     {
-        struct { const char *name; } defect_tests[] = {
-            {"ExecuteDefectMarge1"},
-            {"ExecuteDefectMarge2"},
-            {"ExecuteDefectMarge3"},
-            {0}
+        /* ExecuteDefectMarge1..5 actually perform a defect merge — they rewrite the
+         * hot-pixel map. Never call them from a diagnostic. */
+        static const char *const defect_names[] = {
+            "ExecuteDefectMarge1", "ExecuteDefectMarge2", "ExecuteDefectMarge3", 0
         };
-        int found = 0;
-        for (int i = 0; defect_tests[i].name; i++) {
-            char b[80];
-            int r = call(defect_tests[i].name);
-            snprintf(b, sizeof(b), "  call(\"%s\") = %d%s",
-                     defect_tests[i].name, r, r == 0 ? "" : r < 0 ? " NOT_FOUND" : "");
+        for (int i = 0; defect_names[i]; i++) {
+            char b[192];
+            snprintf(b, sizeof(b), "  %s  (NOT CALLED - mutates hot-pixel map)", defect_names[i]);
             info(b);
-            if (r == 0) found++;
         }
         info("  LV-dependent calls: FA_LvDetectDefects*, FA_CreateTestImage,");
         info("  FA_DefectsTestImage, FA_ProjectionTestImage, FA_SetMergeDefParameter");
         info("  SKIPPED — require active LiveView and may crash camera.");
-        rst(1, "defect_probe_safe", found > 0 ? "some defect calls OK" : "no defect calls available on this FW");
-        info("");
+        skip("defect_probe_safe", "defect routines are mutating; nothing called");
     }
 
-#ifdef CONFIG_70D
-    /* ════════════════════════════════════════
-     * S6: DUAL ISO CMOS TABLE DUMP
-     * ════════════════════════════════════════ */
-    hdr("DUAL ISO CMOS TABLES (S6)");
-    {
-        #define ISOS 7
-        uint32_t photo_cmos0 = 0x404e5664;
-        uint32_t photo_cmos3 = 0x404e5667;
-        uint32_t movie_cmos0 = 0x404e77d6;
-        uint32_t movie_cmos3 = 0x404e77d9;
-        int stride_ph = 20;
-        int stride_mv = 46;
+if (is_70d)
+{
+        /* ════════════════════════════════════════
+         * S6: DUAL ISO CMOS TABLE DUMP
+         * ════════════════════════════════════════ */
+        hdr("DUAL ISO CMOS TABLES (S6)");
+        {
+            /* Accessors: MEM() is a 32-bit dereference and these tables are byte
+             * arrays, so CMOS[3] sits on an ODD address. A 32-bit read there is a
+             * rotated ARMv5 load (or an LDRD fault) - use the correct width. */
+            #define RD16(a) (*(volatile uint16_t *)(uintptr_t)(a))
+            #define RD8(a)  (*(volatile uint8_t  *)(uintptr_t)(a))
 
-        unsigned expected[ISOS] = { 3, 0x27, 0x4b, 0x6f, 0x93, 0xb7, 0xdb };
+            const int isos = 7;
+            const uint32_t photo_cmos0 = 0x404e5664;
+            const uint32_t photo_cmos3 = 0x404e5667;
+            const uint32_t movie_cmos0 = 0x404e77d6;
+            const uint32_t movie_cmos3 = 0x404e77d9;
+            const int stride_ph = 20;
+            const int stride_mv = 46;
 
-        info("  Photo CMOS[0] (stride 20):");
-        int ph_ok = 0;
-        for (int i = 0; i < ISOS; i++) {
-            uint32_t addr = photo_cmos0 + i * stride_ph;
-            uint32_t val = MEM(addr) & 0xFFFF;
-            char b[64];
-            snprintf(b, sizeof(b), "    ISO[%d] 0x%08x = 0x%04x%s",
-                     i, addr, val, val == expected[i] ? "" : " MISMATCH");
-            info(b);
-            if (val == expected[i]) ph_ok++;
+            const unsigned expected[7] = { 3, 0x27, 0x4b, 0x6f, 0x93, 0xb7, 0xdb };
+
+            info("  Photo CMOS[0] (stride 20, uint16):");
+            int ph_ok = 0;
+            for (int i = 0; i < isos; i++) {
+                uint32_t addr = photo_cmos0 + i * stride_ph;
+                uint32_t val = RD16(addr);
+                char b[192];
+                snprintf(b, sizeof(b), "    ISO[%d] 0x%08x = 0x%04x%s",
+                         i, addr, val, val == expected[i] ? "" : " MISMATCH");
+                info(b);
+                if (val == expected[i]) ph_ok++;
+            }
+            rst(ph_ok == isos, "photo_CMOS0", ph_ok == isos ? 0 : "photo CMOS[0] mismatch");
+
+            /* CMOS[3] is a flag/immediate byte, not an ISO code (see doc/deepdive.md:
+             * it reads 0x14 with the flag bits cleared). Dump it, do not compare. */
+            info("  Photo CMOS[3] (stride 20, uint8 - flag byte, not ISO):");
+            for (int i = 0; i < isos; i++) {
+                uint32_t addr = photo_cmos3 + i * stride_ph;
+                char b[192];
+                snprintf(b, sizeof(b), "    [%d] 0x%08x = 0x%02x", i, addr, RD8(addr));
+                info(b);
+            }
+
+            info("  Movie CMOS[0] (stride 46, uint16):");
+            int mv_ok = 0;
+            for (int i = 0; i < isos; i++) {
+                uint32_t addr = movie_cmos0 + i * stride_mv;
+                uint32_t val = RD16(addr);
+                char b[192];
+                snprintf(b, sizeof(b), "    ISO[%d] 0x%08x = 0x%04x%s",
+                         i, addr, val, val == expected[i] ? "" : " MISMATCH");
+                info(b);
+                if (val == expected[i]) mv_ok++;
+            }
+            rst(mv_ok == isos, "movie_CMOS0", mv_ok == isos ? 0 : "movie CMOS[0] mismatch");
+
+            info("  Movie CMOS[3] (stride 46, uint8 - flag byte, not ISO):");
+            for (int i = 0; i < isos; i++) {
+                uint32_t addr = movie_cmos3 + i * stride_mv;
+                char b[192];
+                snprintf(b, sizeof(b), "    [%d] 0x%08x = 0x%02x", i, addr, RD8(addr));
+                info(b);
+            }
+
+            #undef RD16
+            #undef RD8
         }
-        rst(ph_ok == ISOS, "photo_CMOS0", "photo CMOS[0] mismatch");
-
-        info("  Photo CMOS[3] (stride 20):");
-        int ph3_ok = 0;
-        for (int i = 0; i < ISOS; i++) {
-            uint32_t addr = photo_cmos3 + i * stride_ph;
-            uint32_t val = MEM(addr) & 0xFFFF;
-            char b[64];
-            snprintf(b, sizeof(b), "    ISO[%d] 0x%08x = 0x%04x%s",
-                     i, addr, val, val == expected[i] ? "" : " MISMATCH");
-            info(b);
-            if (val == expected[i]) ph3_ok++;
-        }
-        rst(ph3_ok == ISOS, "photo_CMOS3", "photo CMOS[3] mismatch");
-
-        info("  Movie CMOS[0] (stride 46):");
-        int mv_ok = 0;
-        for (int i = 0; i < ISOS; i++) {
-            uint32_t addr = movie_cmos0 + i * stride_mv;
-            uint32_t val = MEM(addr) & 0xFFFF;
-            char b[64];
-            snprintf(b, sizeof(b), "    ISO[%d] 0x%08x = 0x%04x%s",
-                     i, addr, val, val == expected[i] ? "" : " MISMATCH");
-            info(b);
-            if (val == expected[i]) mv_ok++;
-        }
-        rst(mv_ok == ISOS, "movie_CMOS0", "movie CMOS[0] mismatch");
-
-        info("  Movie CMOS[3] (stride 46):");
-        int mv3_ok = 0;
-        for (int i = 0; i < ISOS; i++) {
-            uint32_t addr = movie_cmos3 + i * stride_mv;
-            uint32_t val = MEM(addr) & 0xFFFF;
-            char b[64];
-            snprintf(b, sizeof(b), "    ISO[%d] 0x%08x = 0x%04x%s",
-                     i, addr, val, val == expected[i] ? "" : " MISMATCH");
-            info(b);
-            if (val == expected[i]) mv3_ok++;
-        }
-        rst(mv3_ok == ISOS, "movie_CMOS3", "movie CMOS[3] mismatch");
-        info("");
-    }
-#else
-    hdr("DUAL ISO CMOS TABLES (S6)");
-    rst(0, "photo_CMOS0", "SKIP (70D-specific addresses)");
-    rst(0, "movie_CMOS0", "SKIP (70D-specific addresses)");
-    info("");
-#endif
+}
+else
+{
+        hdr("DUAL ISO CMOS TABLES (S6)");
+        skip("photo_CMOS0", "not a 70D - Dual ISO table address is model-specific");
+        skip("movie_CMOS0", "not a 70D - Dual ISO table address is model-specific");
+}
 
     /* ════════════════════════════════════════
      * S8.2: AUDIO IC PROBE
@@ -1425,7 +1593,7 @@ static void hw_task(void *unused)
         int audio_ok = 0, audio_total = 0;
         for (int i = 0; audio_tests[i].name; i++) {
             audio_total++;
-            char b[80];
+            char b[192];
             int r = call(audio_tests[i].name);
             snprintf(b, sizeof(b), "  call(\"%s\") = %d%s",
                      audio_tests[i].name, r, r == 0 ? "" : r < 0 ? " NOT_FOUND" : "");
@@ -1433,7 +1601,6 @@ static void hw_task(void *unused)
             if (!r) audio_ok++;
         }
         rst(audio_ok > 0, "audio_ic_probe", "all audio calls failed");
-        info("");
     }
 
     /* ════════════════════════════════════════
@@ -1456,18 +1623,19 @@ static void hw_task(void *unused)
             {"SD_STAB3",  0xC040046C},
             {0, 0}
         };
-        int sd_ok = 0, sd_total = 0;
+        int sd_ok = 0;
         for (int i = 0; sd_regs[i].name; i++) {
-            sd_total++;
-            uint32_t val = shamem_read(sd_regs[i].addr);
-            char b[80];
+            /* 0xC04xxxxx is the SD host controller, plain MMIO. shamem_read()
+             * indexes Canon's ENGIO shadow structure and is only valid for
+             * 0xC0Fxxxxx, so it would return nonsense here. */
+            uint32_t val = MEM(sd_regs[i].addr);
+            char b[192];
             snprintf(b, sizeof(b), "  %s (0x%08x) = 0x%08x",
                      sd_regs[i].name, sd_regs[i].addr, val);
             info(b);
             if (val != 0xFFFFFFFF) sd_ok++;
         }
         rst(sd_ok > 0, "sd_registers", "all SD regs returned 0xFF");
-        info("");
     }
 
     /* ════════════════════════════════════════
@@ -1484,18 +1652,17 @@ static void hw_task(void *unused)
             {"GPIO_SD5", 0xC022C648},
             {0, 0}
         };
-        int gpio_ok = 0, gpio_total = 0;
+        int gpio_ok = 0;
         for (int i = 0; gpio_regs[i].name; i++) {
-            gpio_total++;
-            uint32_t val = shamem_read(gpio_regs[i].addr);
-            char b[80];
+            /* GPIO is plain MMIO at 0xC02xxxxx -- see the note on sd_regs. */
+            uint32_t val = MEM(gpio_regs[i].addr);
+            char b[192];
             snprintf(b, sizeof(b), "  %s (0x%08x) = 0x%08x",
                      gpio_regs[i].name, gpio_regs[i].addr, val);
             info(b);
             if (val != 0xFFFFFFFF) gpio_ok++;
         }
         rst(gpio_ok > 0, "sd_gpio_registers", "all GPIO regs returned 0xFF");
-        info("");
     }
 
     log_flush();
@@ -1519,18 +1686,18 @@ static void hw_task(void *unused)
             msleep(50);
         }
         uint32_t avg = (uint32_t)(sum / n);
-        char b[80];
-        snprintf(b, sizeof(b), "  FPS_TA: min=%d max=%d avg=%d range=%d",
+        char b[192];
+        snprintf(b, sizeof(b), "  FPS_TA: min=%u max=%u avg=%u range=%u",
                  min_val, max_val, avg, max_val - min_val);
         info(b);
-        char samp[80];
+        char samp[96];
         int pos = snprintf(samp, sizeof(samp), "  Samples: ");
-        for (int i = 0; i < n && i < 10 && pos < (int)sizeof(samp) - 8; i++) {
-            pos += snprintf(samp + pos, sizeof(samp) - pos, "%s%d", i ? "," : "", samples[i]);
+        for (int i = 0; i < n && i < 10 && pos < (int)sizeof(samp) - 12; i++) {
+            pos += snprintf(samp + pos, sizeof(samp) - pos, "%s%u", i ? "," : "", samples[i]);
         }
         info(samp);
-        rst(max_val - min_val <= 2, "fps_stability", "FPS_TA range > 2");
-        info("");
+        rst(max_val - min_val <= 2, "fps_stability",
+            max_val - min_val <= 2 ? 0 : "FPS_TA range > 2");
     }
 
     /* ════════════════════════════════════════
@@ -1538,6 +1705,12 @@ static void hw_task(void *unused)
      * ════════════════════════════════════════ */
     hdr("CALL DISPATCH EXT (S23.x)");
     {
+        /* Read-only / harmless getters only. Anything that mutates calibration
+         * (FA_AdjustWhiteBalance, FA_DarkAdjAutoExecute, FA_LvDetectDefects*),
+         * touches the display pipeline (TurnOffDisplay) or runs a factory
+         * self-test (FA_CheckSD, FA_ChkAssembly) is deliberately absent: call()
+         * with no args passes whatever is in r0-r3, so these can destroy
+         * factory data or freeze the body. */
         struct { const char *name; } extra_calls[] = {
             {"GetBatteryPerformance"},
             {"GetBatteryTimeRemaining"},
@@ -1545,90 +1718,71 @@ static void hw_task(void *unused)
             {"GetCFnData"},
             {"GetHDMIInfo"},
             {"GetTaskName"},
-            {"SetAudioVolumeOut"},
             {"FA_GetProperty"},
             {"FA_GetPropertyAddress"},
-            {"TurnOffDisplay"},
-            {"FA_CheckSD"},
-            {"FA_ChkAssembly"},
-            {"FA_AdjustWhiteBalance"},
-            {"FA_LvDetectDefectsFull"},
-            {"FA_DarkAdjAutoExecute"},
             {"EnableDebugMon"},
             {"EnablePowerSave"},
             {"EnableFaceCatch"},
             {"EnableFilter"},
             {0}
         };
-        int ok = 0, tot = 0;
+        int ok = 0;
         for (int i = 0; extra_calls[i].name; i++) {
-            tot++;
-            char b[80];
+            char b[192];
             int r = call(extra_calls[i].name);
             snprintf(b, sizeof(b), "  call(\"%s\") = %d%s",
                      extra_calls[i].name, r, r == 0 ? "" : r < 0 ? " NOT_FOUND" : "");
             info(b);
             if (r == 0) ok++;
         }
-        rst(tot > 0, "call_extended", "extended call() tests ran");
-        info("");
+        rst(ok > 0, "call_extended", ok > 0 ? 0 : "no extended call() resolved");
     }
 
     /* ════════════════════════════════════════
-     * S24: FACTORY CALIBRATION TOOLS
+     * S24: FACTORY CALIBRATION TOOLS  (NOT INVOKED)
      * ════════════════════════════════════════ */
     hdr("FACTORY CALIBRATION (S24)");
     {
-        struct { const char *name; const char *desc; } fa_tests[] = {
-            {"FA_CheckSD",           "SD card diagnostic"},
-            {"FA_ChkAssembly",       "Hardware assembly self-test"},
-            {"FA_AdjustWhiteBalance","White balance calibration (needs gray card)"},
-            {"FA_LvDetectDefectsFull","Hot pixel detection in LiveView"},
-            {"FA_DarkAdjAutoExecute","Dark frame recalibration (cap lens)"},
-            {0,0}
+        /* These are all real 70D eventprocs (recorded in AGENTS.md and
+         * tools/ghidra/eventproc_full_map_v3.csv)
+         * but they MUTATE factory calibration data:
+         *   FA_AdjustWhiteBalance  - captures a gray card, rewrites WB correction
+         *   FA_DarkAdjAutoExecute  - rewrites dark-current subtraction offsets
+         *   FA_LvDetectDefectsFull - rewrites the hot-pixel map
+         * call() with no arguments passes whatever happens to be in r0-r3, so
+         * these would run against garbage and permanently damage the camera's
+         * calibration. They are therefore listed only, never called. */
+        static const char *const mutating[] = {
+            "FA_AdjustWhiteBalance", "FA_DarkAdjAutoExecute",
+            "FA_LvDetectDefectsFull", "FA_CheckSD", "FA_ChkAssembly", 0
         };
-        int ok = 0, tot = 0;
-        for (int i = 0; fa_tests[i].name; i++) {
-            tot++;
-            char b[80];
-            int r = call(fa_tests[i].name);
-            snprintf(b, sizeof(b), "  call(\"%s\") = %d  (%s)%s",
-                     fa_tests[i].name, r, fa_tests[i].desc,
-                     r == 0 ? " READY" : r < 0 ? " NOT_FOUND" : "");
+        for (int i = 0; mutating[i]; i++) {
+            char b[192];
+            snprintf(b, sizeof(b), "  %s  (NOT CALLED - mutates calibration)", mutating[i]);
             info(b);
-            if (r == 0) ok++;
         }
-        rst(ok >= 0, "factory_cal", ok > 0 ? "some FA calls available" : "no FA calls");
-        info("  Note: FA_* functions need real hardware (not QEMU)");
-        info("");
+        skip("factory_cal", "mutating FA_* calls not executed (calibration safety)");
     }
 
     /* ════════════════════════════════════════
-     * S24b: LCD TEST PATTERNS
+     * S24b: LCD TEST PATTERNS  (NOT INVOKED)
      * ════════════════════════════════════════ */
     hdr("LCD TEST PATTERNS (S24b)");
     {
-        struct { const char *name; const char *desc; } disp_tests[] = {
-            {"FA_DISP_Start100White","Full white pattern"},
-            {"FA_DISP_Start50Gray",  "50% gray pattern"},
-            {"FA_DISP_StartColor",   "Color bars"},
-            {"FA_DISP_StartMix",     "Mixed test pattern"},
-            {"FA_DISP_SetBrightness","Display brightness control"},
-            {0,0}
+        /* FA_DISP_Start* enter a factory test mode that is only left by the
+         * matching FA_DISP_End*. Calling Start without End leaves the LCD
+         * showing test patterns until the camera is power cycled. */
+        static const char *const disp_only[] = {
+            "FA_DISP_Start100White", "FA_DISP_Start50Gray",
+            "FA_DISP_StartColor", "FA_DISP_StartMix",
+            "FA_DISP_SetBrightness", 0
         };
-        int ok = 0, tot = 0;
-        for (int i = 0; disp_tests[i].name; i++) {
-            tot++;
-            char b[80];
-            int r = call(disp_tests[i].name);
-            snprintf(b, sizeof(b), "  call(\"%s\") = %d  (%s)%s",
-                     disp_tests[i].name, r, disp_tests[i].desc,
-                     r == 0 ? " READY" : r < 0 ? " NOT_FOUND" : "");
+        for (int i = 0; disp_only[i]; i++) {
+            char b[192];
+            snprintf(b, sizeof(b), "  %s  (NOT CALLED - needs matching FA_DISP_End*)", disp_only[i]);
             info(b);
-            if (r == 0) ok++;
         }
-        rst(ok > 0, "lcd_test_patterns", ok > 0 ? "some FA_DISP calls available" : "no FA_DISP calls");
-        info("");
+        skip("lcd_test_patterns", "FA_DISP_Start* not executed (no End* counterpart)");
     }
 
     /* ════════════════════════════════════════
@@ -1644,7 +1798,6 @@ static void hw_task(void *unused)
         char ptp_b[80];
         snprintf(ptp_b, sizeof(ptp_b), "InitializePTPFrameworkController=%d", p);
         info(ptp_b);
-        info("");
     }
 
     /* ════════════════════════════════════════
@@ -1652,35 +1805,28 @@ static void hw_task(void *unused)
      * ════════════════════════════════════════ */
     hdr("CROP REC / ADTG REGISTERS (S5.8)");
     {
-#ifdef CONFIG_70D
-        struct { const char *name; uint32_t addr; } cr_regs[] = {
-            {"CMOS_0_WR",  0x26B54},
-            {"ADTG_WR",    0x2684C},
-            {"CMOS_0_ADDR", 0xC0F06008},
-            {"ADTG_8172",  0xC0F38010},
-            {"ADTG_8173",  0xC0F38014},
-            {"ADTG_8178",  0xC0F38020},
-            {"ADTG_8179",  0xC0F38024},
-            {"ENGIO_HEAD3",0xC0F0713C},
-            {"ENGIO_HEAD4",0xC0F07150},
-            {0,0}
+        /* 70D crop_rec / ADTG register set.
+         * CMOS_0_WR / ADTG_WR are CODE addresses (the CMOS_write / ADTG_write
+         * functions), so they must be read with MEM(), not shamem_read().
+         * Everything else is ENGIO MMIO (0xC0Fxxxxx) -> shamem_read(). */
+        struct { const char *name; uint32_t addr; int is_ram; } cr_regs[] = {
+            {"CMOS_WRITE_FN",  0x00026B54, 1},
+            {"ADTG_WRITE_FN",  0x0002684C, 1},
+            {"CMOS_ISO_BASE",  0x404E5664, 1},
+            {"FPS_TA_dup",     0xC0F06008, 0},
+            {"ADTG_8172",      0xC0F38010, 0},
+            {"ADTG_8173",      0xC0F38014, 0},
+            {"ADTG_8178",      0xC0F38020, 0},
+            {"ADTG_8179",      0xC0F38024, 0},
+            {"ENGIO_HEAD3",    0xC0F0713C, 0},
+            {"ENGIO_HEAD4",    0xC0F07150, 0},
+            {0, 0, 0}
         };
-#else
-        struct { const char *name; uint32_t addr; } cr_regs[] = {
-            {"CMOS_0_ADDR", 0xC0F06008},
-            {"ADTG_8172",  0xC0F38010},
-            {"ADTG_8173",  0xC0F38014},
-            {"ADTG_8178",  0xC0F38020},
-            {"ADTG_8179",  0xC0F38024},
-            {"ENGIO_HEAD3",0xC0F0713C},
-            {"ENGIO_HEAD4",0xC0F07150},
-            {0,0}
-        };
-#endif
         int found = 0;
         for (int i = 0; cr_regs[i].name; i++) {
-            char b[80];
-            uint32_t v = shamem_read(cr_regs[i].addr);
+            char b[192];
+            uint32_t v = cr_regs[i].is_ram ? MEM(cr_regs[i].addr)
+                                           : shamem_read(cr_regs[i].addr);
             snprintf(b, sizeof(b), "  %s (0x%08x) = 0x%08x",
                      cr_regs[i].name, cr_regs[i].addr, v);
             info(b);
@@ -1688,7 +1834,6 @@ static void hw_task(void *unused)
         }
         rst(found > 0, "adtg_crop_regs",
             found > 0 ? "some crop rec regs readable" : "all returned 0/0xFF");
-        info("");
     }
 
     /* ════════════════════════════════════════
@@ -1696,8 +1841,8 @@ static void hw_task(void *unused)
      * ════════════════════════════════════════ */
     hdr("SD CARD MODE (S9.x)");
     {
-        int mode = shamem_read(0xC0400614);
-        char b[80];
+        uint32_t mode = MEM(0xC0400614);
+        char b[192];
         snprintf(b, sizeof(b), "  SD_MASTER (0xc0400614) = 0x%08x", mode);
         info(b);
         if (mode == 0x1D000301 || mode == 0x1D000001 || mode == 0x1D000601) {
@@ -1707,8 +1852,8 @@ static void hw_task(void *unused)
         } else {
             info("  SD mode: unknown value");
         }
-        rst(1, "sd_mode_status", "SD status probed");
-        info("");
+        rst(mode != 0xFFFFFFFF, "sd_mode_register",
+            mode == 0xFFFFFFFF ? "SD host register reads all-ones (unmapped?)" : 0);
     }
 
     /* ════════════════════════════════════════
@@ -1718,13 +1863,16 @@ static void hw_task(void *unused)
     scr_y = LINE_H;
     hdr("SUMMARY");
     {
-        char b[80];
+        char b[192];
         snprintf(b, sizeof(b), "%d total, %d pass, %d skip, %d fail",
                  t_total, t_pass, t_skip, t_fail);
         info(b);
         info("Full log: ML/LOGS/HW_TEST.LOG");
     }
-    rst(t_pass + t_skip + t_fail == t_total, "all_tests_run", "count mismatch");
+    /* Real aggregate: any FAIL at all is a problem. (The old
+     * t_pass+t_skip+t_fail==t_total check was algebraically always true.) */
+    rst(t_fail == 0, "no_failures",
+        t_fail == 0 ? 0 : "one or more tests FAILED - see log");
 
     /* Close log with CSV dump of all register values for offline parsing */
     if (log_fp) {
@@ -1742,15 +1890,21 @@ static void hw_task(void *unused)
 
     info_led_blink(3, 100, 100);
     msleep(10000);
-    bmp_off();
+
+    /* No bmp_off() here: muting the overlay would hide ML's menus, zebras and
+     * histogram until the user re-opens the ML menu. */
 }
 
 static unsigned int hw_init(void)
 {
     if (config_flag_file_setting_load("ML/SETTINGS/HW_TEST.RUN"))
     {
-        hw_task(0);
         config_flag_file_setting_save("ML/SETTINGS/HW_TEST.RUN", 0);
+
+        /* Run in our own task: module init runs sequentially on module_task, and
+         * the full suite blocks for minutes (RAM dumps + SD benchmarks + sleeps).
+         * Running it inline would stall every module initialised after this one. */
+        task_create("hw_test_task", 0x1c, 0x2000, hw_task, (void*)0);
     }
     return 0;
 }

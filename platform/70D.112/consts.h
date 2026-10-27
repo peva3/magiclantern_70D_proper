@@ -124,6 +124,9 @@
 #define MENU_MODE (gui_state == GUISTATE_PLAYMENU && CURRENT_GUI_MODE == GUIMODE_MENU)
 
 #define AUDIO_MONITORING_HEADPHONES_CONNECTED 0
+/* No hotplug-video-out property node was found on the 70D.
+ * Both are deliberately defined as 0: every consumer must test the VALUE
+ * (#if / if), never #ifdef, otherwise it dereferences address 0. */
 #define HOTPLUG_VIDEO_OUT_PROP_DELIVER_ADDR 0
 #define HOTPLUG_VIDEO_OUT_STATUS_ADDR 0
 
@@ -211,7 +214,6 @@
 #define BFNT_BITMAP_OFFSET		0xF737A084
 #define BFNT_BITMAP_DATA		0xF737D3D8
 
-#define GUIMODE_SIGNATURE 0x6E6144 
 
 // from CFn
 #define AF_BTN_HALFSHUTTER 0
@@ -229,7 +231,7 @@
 #define BULB_EXPOSURE_CORRECTION 150                        // min value for which bulb exif is OK [not tested]
 
 // see http://magiclantern.wikia.com/wiki/VRAM/BMP
-#define WINSYS_BMP_DIRTY_BIT_NEG MEM(0x9DD90)               // 0x9dd6c+0x2
+#define WINSYS_BMP_DIRTY_BIT_NEG MEM(0x9DD90)               // 0x9dd64+0x2c (base+offset, as in the 5D3/100D ports)
 
 // manual exposure overrides
 #define LVAE_STRUCT 0xE8738
@@ -282,7 +284,9 @@
 #define UNAVI (MEM(UNAVI_BASE + 0x24)) // 70D has no CancelUnaviFeedBackTimer, still this changes to value 2 when you keep HS pressed
 #define UNAVI_AV (MEM(UNAVI_BASE + 0x58)) // Same as above, but this location is linked to the exp comp button
 #define LV_BOTTOM_BAR_DISPLAYED ((UNAVI == 2) || (UNAVI_AV != 0))
-#undef UNAVI_FEEDBACK_TIMER_ACTIVE // no CancelUnaviFeedBackTimer in the firmware
+/* UNAVI_FEEDBACK_TIMER_ACTIVE is not used: the 70D firmware has no
+ * CancelUnaviFeedBackTimer.  The flag is not defined here at all
+ * (only the 5D3 port defines it), so there is nothing to #undef. */
 
 #define DISPLAY_ORIENTATION MEM(0x7B464) // read-only; string: UpdateReverseTFT.
 

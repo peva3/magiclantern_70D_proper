@@ -237,11 +237,14 @@ static void show_display_gain_level()
 static void adjust_backlight_level(int delta)
 {
     if (backlight_level < 1 || backlight_level > 7) return; // kore wa dame desu yo
-    if (!DISPLAY_IS_ON) {
 #ifndef CONFIG_70D
-        call("TurnOnDisplay");
+    if (!DISPLAY_IS_ON) call("TurnOnDisplay");
+#else
+    /* call("TurnOnDisplay") hard-freezes the 70D, and adjusting the backlight
+     * while the display is off only queues a NotifyBox onto a dark screen, so
+     * just ignore the shortcut in that state. */
+    if (!DISPLAY_IS_ON) return;
 #endif
-    }
     
     int digic_iso_gain_photo = get_digic_iso_gain_photo();
     int G = gain_to_ev_scaled(digic_iso_gain_photo, 1) - 10;
@@ -1443,11 +1446,13 @@ int handle_arrow_keys(struct event * event)
     #endif
     
     #ifdef CONFIG_70D
-    if (BGMT_PRESS_METERING_OR_AFAREA)
-    {
-        arrow_key_mode_toggle();
-        return 1;
-    }
+    /* No usable metering/AF-area button event exists on this body:
+     * platform/70D.112/gui.h has BGMT_PRESS_METERING_OR_AFAREA only as a
+     * commented-out definition (nikfreak marked the predicate "unreliable"),
+     * so referring to it here was an undeclared identifier.  It compiled only
+     * because FEATURE_ARROW_SHORTCUTS is #undef'd in features.h.  If arrow
+     * shortcuts are ever enabled for the 70D, the predicate has to be derived
+     * and verified on hardware first. */
     #endif
 
     #ifdef CONFIG_50D
