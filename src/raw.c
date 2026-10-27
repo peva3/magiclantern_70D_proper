@@ -162,7 +162,7 @@ static volatile struct edmac_mmio *raw_lv_edmac = (struct edmac_mmio *)RAW_LV_ED
  * and http://a1ex.bitbucket.org/ML/states/ for state diagrams.
  */
 
-#if defined(CONFIG_5D2) || defined(CONFIG_50D) || defined(CONFIG_60D) || defined(CONFIG_550D) || defined(CONFIG_500D) || defined(CONFIG_600D) || defined(CONFIG_1100D) || defined(CONFIG_7D)
+#if defined(CONFIG_5D2) || defined(CONFIG_50D) || defined(CONFIG_60D) || defined(CONFIG_550D) || defined(CONFIG_500D) || defined(CONFIG_600D) || defined(CONFIG_1100D) || defined(CONFIG_7D) || defined(CONFIG_1300D)
 #define RAW_PHOTO_EDMAC 0xc0f04208
 #endif
 
@@ -312,6 +312,13 @@ static int get_default_white_level()
       6444, 10000,     -904, 10000,    -893, 10000,\
     -4563, 10000,    12308, 10000,    2535, 10000, \
      -903, 10000,     2016, 10000,    6728, 10000
+#endif
+
+#ifdef CONFIG_1300D
+    #define CAM_COLORMATRIX1                       \
+     6939, 10000,      -1016, 10000,    -886, 10000, \
+    -4428, 10000,    12473, 10000,    2177, 10000, \
+    -1175, 10000,     2178, 10000,    6162, 10000
 #endif
 
 #ifdef CONFIG_60D
@@ -574,6 +581,10 @@ static int dynamic_ranges[] = {1146, 1139, 1116, 1061, 980, 898, 806, 728};
 static int dynamic_ranges[] = {1099, 1098, 1082, 1025, 965, 877, 784}; // No ISO 12800 available
 #endif
 
+#ifdef CONFIG_1300D
+static int dynamic_ranges[] = {1112, 1080, 1038, 984, 917, 834, 733, 655};
+#endif
+
 #ifdef CONFIG_650D
 static int dynamic_ranges[] = {1062, 1047, 1021, 963,  888, 804, 695, 623, 548};
 #endif
@@ -588,8 +599,7 @@ static int dynamic_ranges[] = {1196, 1170, 1139, 1087, 1019, 938, 848, 756, 664}
 #endif
 
 #if defined(CONFIG_80D)
-//same sensor
-static int dynamic_ranges[] = {1317, 1264, 1176, 1092, 1005, 921, 840, 731, 644};
+static int dynamic_ranges[] = {1233, 1180, 1093, 1008, 921, 837, 756, 648, 560};
 #endif
 
 #ifdef CONFIG_850D
@@ -614,9 +624,8 @@ static int dynamic_ranges[] = {1255, 1237, 1188, 1120, 1045, 964, 883, 785, 685,
 static int dynamic_ranges[] = {1105, 1086, 1065, 1038, 1000, 936, 846, 773, 676, 585, 499};
 #endif
 
-// TODO: DxO graph is corrupted, so leaving R values for now
 #ifdef CONFIG_R5
-static int dynamic_ranges[] = {1255, 1237, 1188, 1120, 1045, 964, 883, 785, 685, 599, 507};
+static int dynamic_ranges[] = {1333, 1218, 1255, 1127, 1038, 939, 845, 747, 643, 552, 452};
 #endif
 
 /** M50 data missing from DxO.
@@ -997,6 +1006,13 @@ int raw_update_params_work()
         skip_left = zoom ? 72 : 68;
         #endif
 
+        #ifdef CONFIG_1300D
+        skip_top    = 28;
+        skip_left   = zoom ? 0 : 154;
+        skip_right  = zoom ? 0 : 4;
+        skip_bottom = zoom ? 4 : 0;
+        #endif
+
         #ifdef CONFIG_60D
         skip_top    = 26;
         skip_left   = zoom ? 0 : mv640crop ? 150 : 152;
@@ -1135,7 +1151,7 @@ int raw_update_params_work()
         height--;
         #endif
 
-        #if defined(CONFIG_550D) || defined(CONFIG_60D) || defined(CONFIG_600D)
+        #if defined(CONFIG_550D) || defined(CONFIG_60D) || defined(CONFIG_600D) || defined(CONFIG_1300D)
         skip_left = 142;
         skip_top = 52;
         #endif

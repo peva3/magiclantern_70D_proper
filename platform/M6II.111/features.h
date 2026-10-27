@@ -22,9 +22,17 @@
 //#define CONFIG_ADDITIONAL_VERSION
 #define FEATURE_SCREENSHOT
 
+#define CONFIG_STATE_OBJECT_HOOKS
+#define CONFIG_LIVEVIEW
+#define FEATURE_POWERSAVE_LIVEVIEW
+
 // enable global draw
 #define FEATURE_GLOBAL_DRAW
 #define FEATURE_CROPMARKS
+
+// Enable remapping ROM pages to RAM
+#define CONFIG_SGI_HANDLERS
+#define CONFIG_MMU_REMAP
 
 // enable for testing gui structure changes
 //#define CONFIG_RESTORE_AFTER_FORMAT
@@ -36,6 +44,12 @@
 #define FEATURE_PICSTYLE
 #define CONFIG_PROP_REQUEST_CHANGE
 
-#undef CONFIG_CRASH_LOG
-#undef CONFIG_AUTOBACKUP_ROM
+// Fast disk logging
+#define FEATURE_DISK_LOG
+
+// This should be fine on all D8
+#define CONFIG_CRASH_LOG
+
+#define CONFIG_AUTOBACKUP_ROM
+
 #undef CONFIG_ADDITIONAL_VERSION

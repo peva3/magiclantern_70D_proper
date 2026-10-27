@@ -61,6 +61,8 @@ extern float powf(float x, float y);
  *
  * Return value is ((int16_t unknown << 16)|(uint16_t task_id)) << 1
  * i.e., to extract out task_id you do: (val >> 1) & 0xffff
+ * 
+ * Lower value priority are higher priority tasks.
  */
 extern uint32_t
 task_create(
@@ -79,6 +81,8 @@ task_create(
  *
  * Return value is ((int16_t unknown << 16)|(uint16_t task_id)) << 1
  * i.e., to extract out task_id you do: (val >> 1) & 0xffff
+ * 
+ * Lower value priority are higher priority tasks.
  */
 extern uint32_t
 task_create_ex(
@@ -115,10 +119,10 @@ create_named_semaphore(
                             // Use SEM_CREATE_LOCKED and SEM_CREATE_UNLOCKED.
 );
 
-// On D45 cams, passing in a NULL pointer is an error,
-// but the zero page is mapped and there's no memory protection,
-// so it will work.
+// On D45 cams, passing a sem which is 0 or low-bit 1 is an error.
 // On modern cams, this is an OS assert so must be avoided.
+// This is not really a pointer, it's a bitfield containing
+// an ID and at least one status bit (the low bit).
 //
 // A timeout of 0 means wait forever.
 //
@@ -316,6 +320,7 @@ uint32_t RequestRPC (uint32_t id, void* data, uint32_t length, uint32_t cb, uint
 #define WEAK_FUNC(name)  __attribute__((weak,alias(#name))) 
 static unsigned int ret_0() { return 0; }
 static unsigned int ret_1() { return 1; }
+static void ret_void() { return; }
 
 /** AF microadjustment **/
 int get_afma(int mode);

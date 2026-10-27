@@ -276,6 +276,10 @@ static void prop_reset_ack(uint32_t property)
     }
 }
 
+// FIXME this would be better as a real CONFIG style flag,
+// not Digic generation based.  We probably get cleaner code if we
+// can limit properties for older cams too, sometimes they special
+// case behaviour, where banning an individual property might be cleaner.
 #ifdef CONFIG_DIGIC_678X
 static int is_prop_allowed(uint32_t property)
 {
@@ -289,6 +293,11 @@ static int is_prop_allowed(uint32_t property)
         }
     }
     return 0;
+}
+#else
+static int is_prop_allowed(uint32_t property)
+{
+    return 1;
 }
 #endif
 
@@ -384,6 +393,9 @@ ok:
 
 int prop_request_change_wait(unsigned property, const void* addr, size_t len, int timeout)
 {
+    if (!is_prop_allowed(property))
+        return 0; // avoid timing out if this property cannot be changed
+
     prop_reset_ack(property);
     prop_request_change(property, addr, len);
     

@@ -56,7 +56,7 @@
 #define CONFIG_MMU_REMAP
 
 // ROM has a function to automatically determine a fast(er) speed for SD card.
-// TODO: possibly we could integrate sd_uhs.mo behind this same feature flag and menu.
+// TODO: possibly we could integrate sd_clock.mo behind this same feature flag and menu.
 #define FEATURE_SD_AUTOTUNE
 
 // We are able to override the MOV / MP4 29:59 limit
@@ -70,5 +70,7 @@
 // http://www.mcternan.me.uk/ArmStackUnwinding/
 #define CONFIG_CRASH_LOG
 
+// If rom backups don't exist on this card, create them
+#define CONFIG_AUTOBACKUP_ROM
+
 #undef CONFIG_ADDITIONAL_VERSION
-#undef CONFIG_AUTOBACKUP_ROM
