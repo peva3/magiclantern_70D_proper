@@ -449,7 +449,9 @@ static void hw_task(void *unused)
         info(buf);
         for (int i = 0; i < 10; i++)
             if (ptrs[i]) fio_free(ptrs[i]);
-        rst(n >= 8, "fio_stress", n < 8 ? 0 : 0);
+        static char why[32];
+        if (n < 8) snprintf(why, sizeof(why), "only %d/10 blocks", n);
+        rst(n >= 8, "fio_stress", n >= 8 ? (const char *)0 : why);
     }
 
     blink_delay(500);
