@@ -20,7 +20,11 @@ sd_clock
 selftest
 sf_dump
 silent
-hw_test
+# hw_test deprecated (Sprint 47): not built, not shipped. The module is a
+# read-only hardware proving ground and is no longer a default operation.
+# Build it manually with `make -C modules/hw_test` and copy the .mo to the
+# card if you ever need it again.
+#hw_test
 wifitst
 raw_vidx
 ptptun

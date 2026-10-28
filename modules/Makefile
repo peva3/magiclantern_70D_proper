@@ -31,6 +31,15 @@ CFLAGS += -march=$(MODULE_ARCH)
 
 # List of modules that are built by default, including
 # when building a zip for a cam.
+# NOTE: hw_test is deprecated and deliberately absent from this list.
+# The hardware proving ground has done its job, and a 34 KB register scanner is
+# no longer something we want in every bootable build.  The source stays in
+# tree and is still buildable on demand:
+#     make -C modules/hw_test
+# then copy modules/hw_test/build/hw_test.mo to ML/modules/ on the card.
+# To restore it as a default, add "hw_test \" back to this list AND to
+# platform/<model>/modules.included.  (Do not put a '#' comment inside the
+# list itself -- a comment inside a \-continued assignment eats the rest.)
 ML_MODULES = \
     raw_video/mlv_lite \
     raw_video/mlv_play \
@@ -56,7 +65,6 @@ ML_MODULES = \
     dev_tools/adtglog2 \
     sd_clock \
     raw_video/raw_vidx \
-    hw_test \
     wifisrv \
     wifitst \
     ptptun \

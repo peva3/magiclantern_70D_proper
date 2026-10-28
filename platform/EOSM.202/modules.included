@@ -19,5 +19,6 @@ sd_clock
 selftest
 silent
 ptptun
-hw_test
+# hw_test deprecated (Sprint 47): no longer built. See modules/Makefile.
+#hw_test
 ramdump

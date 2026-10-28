@@ -462,7 +462,16 @@ if (zebra_draw && raw_zebra_enable == 1) raw_needed = 1;
 
 ## 15. Modules (`modules.included`)
 
-**Enabled (30 modules):** adv_int, arkanoid, autoexpo, bench, crop_rec, deflick, dot_tune, dual_iso, edmac, ettr, file_man, img_name, lua, mlv_lite, mlv_play, mlv_snd, pic_view, **sd_clock**, selftest, sf_dump, silent, hw_test, **wifitst**, raw_vidx, ptptun, wifisrv, adtglog2, ramdump
+**Enabled (29 modules):** adv_int, arkanoid, autoexpo, bench, crop_rec, deflick, dot_tune, dual_iso, edmac, ettr, file_man, img_name, lua, mlv_lite, mlv_play, mlv_snd, pic_view, **sd_clock**, selftest, sf_dump, silent, **wifitst**, raw_vidx, ptptun, wifisrv, adtglog2, ramdump
+
+**Deprecated (Sprint 47): `hw_test`.** No longer built or shipped — the hardware
+proving ground has served its purpose and a 34 KB register scanner does not
+belong in every bootable build. The source is kept in tree and still builds on
+demand (`make -C modules/hw_test`); copy the resulting `.mo` to `ML/modules/`
+on the card if you need it. It is removed from `modules/Makefile`'s
+`ML_MODULES` and from `platform/*/modules.included`. `./validate_build.sh` now
+fails if it reappears in the build. `analyze_hw_test.py` still parses its log
+format for anyone running it manually.
 
 **Renames/removals (Sprint 46):**
 - `sd_uhs` → `sd_clock` (upstream rename, kept our 70D OFF/160MHz menu restriction)

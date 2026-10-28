@@ -41,7 +41,7 @@ echo ""
 
 # --- modules --------------------------------------------------------------
 echo "=== Modules ==="
-for mod in hw_test crop_rec dual_iso sd_clock mlv_lite ptptun wifisrv wifitst ramdump; do
+for mod in crop_rec dual_iso sd_clock mlv_lite ptptun wifisrv wifitst ramdump; do
     if [[ -f "$MODULES_DIR/${mod}.mo" ]]; then
         echo "✓ ${mod}.mo: $(filesize "$MODULES_DIR/${mod}.mo") bytes"
     else
@@ -60,7 +60,7 @@ echo ""
 
 # --- module sources -------------------------------------------------------
 echo "=== Source Validation ==="
-for src in modules/hw_test/hw_test.c modules/ptptun/ptptun.c modules/wifisrv/wifisrv.c \
+for src in modules/ptptun/ptptun.c modules/wifisrv/wifisrv.c \
            modules/wifitst/wifitst.c modules/ramdump/ramdump.c; do
     if [[ -f "$SCRIPT_DIR/$src" ]]; then
         echo "✓ $src"
@@ -69,22 +69,38 @@ for src in modules/hw_test/hw_test.c modules/ptptun/ptptun.c modules/wifisrv/wif
     fi
 done
 
-if grep -q "MODULE_INIT" "$SCRIPT_DIR/modules/hw_test/hw_test.c"; then
-    echo "  ✓ hw_test MODULE_INIT found"
+# hw_test is deprecated but must stay buildable on demand, so the source has to
+# be present even though nothing builds it by default.
+if [[ -f "$SCRIPT_DIR/modules/hw_test/hw_test.c" ]]; then
+    echo "  ✓ modules/hw_test/hw_test.c kept (deprecated, not built)"
 else
-    fail "hw_test MODULE_INIT missing"
+    fail "modules/hw_test/hw_test.c missing (should stay in tree)"
 fi
 echo ""
 
 # --- modules.included -----------------------------------------------------
 echo "=== modules.included ==="
-for mod in hw_test ptptun wifisrv wifitst ramdump sd_clock; do
+for mod in ptptun wifisrv wifitst ramdump sd_clock; do
     if grep -qx "$mod" "$SCRIPT_DIR/platform/70D.112/modules.included"; then
         echo "✓ $mod"
     else
         fail "$mod NOT in modules.included"
     fi
 done
+echo ""
+
+# --- deprecations ---------------------------------------------------------
+echo "=== Deprecated modules ==="
+if [[ -f "$MODULES_DIR/hw_test.mo" ]]; then
+    fail "hw_test.mo was built - it is deprecated and must not be a default module"
+else
+    echo "✓ hw_test not built"
+fi
+if grep -qx "hw_test" "$SCRIPT_DIR/platform/70D.112/modules.included"; then
+    fail "hw_test still listed in platform/70D.112/modules.included"
+else
+    echo "✓ hw_test not shipped"
+fi
 echo ""
 
 # --- no leftover renames --------------------------------------------------
@@ -105,7 +121,7 @@ echo ""
 if [[ $FAILED -eq 0 ]]; then
     echo "=== Validation PASSED ==="
     echo "Next: copy build/70d-latest/autoexec.bin to the card, or run ./deploy.sh"
-    echo "Then ML menu -> Debug -> 'HW Test' / 'Dump RAM + serial flash'."
+    echo "Then ML menu -> Debug -> 'Dump RAM + serial flash' (hw_test is deprecated)."
 else
     echo "=== Validation FAILED ==="
     exit 1
